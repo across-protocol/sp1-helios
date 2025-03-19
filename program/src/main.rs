@@ -1,13 +1,13 @@
 #![no_main]
 sp1_zkvm::entrypoint!(main);
 
-use alloy_primitives::{Bytes, B256, U256};
+use alloy_primitives::{Address, Bytes, B256, U256};
 use alloy_sol_types::SolValue;
 use alloy_trie::{proof, Nibbles};
 use helios_consensus_core::{
     apply_finality_update, apply_update, verify_finality_update, verify_update,
 };
-use sp1_helios_primitives::types::{ProofInputs, ProofOutputs};
+use sp1_helios_primitives::types::{ProofInputs, ProofOutputs, VerifiedStorageSlot};
 use tree_hash::TreeHash;
 
 /// Program flow:
@@ -79,6 +79,7 @@ pub fn main() {
     for slot in storage_slots {
         let key = slot.slot;
         let value = slot.expected_value;
+        let address = slot.address;
 
         // Convert key to nibbles
         let key_nibbles = Nibbles::unpack(key.as_slice());
@@ -100,7 +101,12 @@ pub fn main() {
             panic!("Storage proof invalid for slot {}: {}", hex::encode(key), e);
         }
 
-        verified_slots.push(value);
+        let address_bytes: [u8; 20] = address.as_slice()[12..].try_into().unwrap();
+        verified_slots.push(VerifiedStorageSlot {
+            key,
+            value,
+            contractAddress: Address::from(address_bytes),
+        });
         println!("Verified storage slot: {}", hex::encode(key));
     }
 
@@ -122,7 +128,7 @@ pub fn main() {
         prevHead: U256::from(prev_head),
         syncCommitteeHash: sync_committee_hash,
         startSyncCommitteeHash: start_sync_committee_hash,
-        verifiedStorageSlots: verified_slots,
+        slots: verified_slots,
     };
     sp1_zkvm::io::commit_slice(&proof_outputs.abi_encode());
 }

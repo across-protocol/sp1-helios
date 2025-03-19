@@ -34,6 +34,12 @@ pub struct ExecutionStateProof {
 }
 
 sol! {
+    struct VerifiedStorageSlot {
+        bytes32 key;
+        bytes32 value;
+        address contractAddress;
+    }
+
     struct ProofOutputs {
         bytes32 executionStateRoot;
         bytes32 newHeader;
@@ -43,6 +49,6 @@ sol! {
         uint256 prevHead;
         bytes32 syncCommitteeHash;
         bytes32 startSyncCommitteeHash;
-        bytes32[] verifiedStorageSlots;
+        VerifiedStorageSlot[] slots;
     }
 }
