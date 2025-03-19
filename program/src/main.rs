@@ -1,8 +1,9 @@
 #![no_main]
 sp1_zkvm::entrypoint!(main);
 
-use alloy_primitives::{B256, U256};
+use alloy_primitives::{Bytes, B256, U256};
 use alloy_sol_types::SolValue;
+use alloy_trie::{proof, Nibbles};
 use helios_consensus_core::{
     apply_finality_update, apply_update, verify_finality_update, verify_update,
 };
@@ -13,8 +14,9 @@ use tree_hash::TreeHash;
 /// 1. Apply sync committee updates, if any
 /// 2. Apply finality update
 /// 3. Verify execution state root proof
-/// 4. Asset all updates are valid
-/// 5. Commit new state root, header, and sync committee for usage in the on-chain contract
+/// 4. Verify storage slot proofs
+/// 5. Asset all updates are valid
+/// 6. Commit new state root, header, and sync committee for usage in the on-chain contract
 pub fn main() {
     let encoded_inputs = sp1_zkvm::io::read_vec();
 
@@ -25,6 +27,7 @@ pub fn main() {
         mut store,
         genesis_root,
         forks,
+        storage_slots,
     } = serde_cbor::from_slice(&encoded_inputs).unwrap();
 
     let start_sync_committee_hash = store.current_sync_committee.tree_hash_root();
@@ -64,7 +67,44 @@ pub fn main() {
 
     apply_finality_update(&mut store, &finality_update);
 
-    // 3. Commit new state root, header, and sync committee for usage in the on-chain contract
+    // 3. Verify storage slot proofs
+    let execution_state_root = *store
+        .finalized_header
+        .execution()
+        .expect("Execution payload doesn't exist.")
+        .state_root();
+
+    let mut verified_slots = Vec::with_capacity(storage_slots.len());
+
+    for slot in storage_slots {
+        let key = slot.slot;
+        let value = slot.expected_value;
+
+        // Convert key to nibbles
+        let key_nibbles = Nibbles::unpack(key.as_slice());
+
+        // Convert value to bytes for verification
+        let value_bytes = value.as_slice().to_vec();
+
+        // Convert proof to Bytes
+        let proof: Vec<Bytes> = slot
+            .proof
+            .iter()
+            .map(|b| Bytes::copy_from_slice(b.as_ref()))
+            .collect();
+
+        // Verify the storage proof
+        if let Err(e) =
+            proof::verify_proof(execution_state_root, key_nibbles, Some(value_bytes), &proof)
+        {
+            panic!("Storage proof invalid for slot {}: {}", hex::encode(key), e);
+        }
+
+        verified_slots.push(value);
+        println!("Verified storage slot: {}", hex::encode(key));
+    }
+
+    // 4. Commit new state root, header, and sync committee for usage in the on-chain contract
     let header: B256 = store.finalized_header.beacon().tree_hash_root();
     let sync_committee_hash: B256 = store.current_sync_committee.tree_hash_root();
     let next_sync_committee_hash: B256 = match &mut store.next_sync_committee {
@@ -74,11 +114,7 @@ pub fn main() {
     let head = store.finalized_header.beacon().slot;
 
     let proof_outputs = ProofOutputs {
-        executionStateRoot: *store
-            .finalized_header
-            .execution()
-            .expect("Execution payload doesn't exist.")
-            .state_root(),
+        executionStateRoot: execution_state_root,
         newHeader: header,
         nextSyncCommitteeHash: next_sync_committee_hash,
         newHead: U256::from(head),
@@ -86,6 +122,7 @@ pub fn main() {
         prevHead: U256::from(prev_head),
         syncCommitteeHash: sync_committee_hash,
         startSyncCommitteeHash: start_sync_committee_hash,
+        verifiedStorageSlots: verified_slots,
     };
     sp1_zkvm::io::commit_slice(&proof_outputs.abi_encode());
 }

@@ -6,6 +6,14 @@ use helios_consensus_core::types::{FinalityUpdate, LightClientStore, Update};
 use serde::{Deserialize, Serialize};
 
 #[derive(Serialize, Deserialize, Debug)]
+pub struct StorageSlot {
+    pub address: B256,
+    pub slot: B256,
+    pub proof: Vec<B256>,
+    pub expected_value: B256,
+}
+
+#[derive(Serialize, Deserialize, Debug)]
 pub struct ProofInputs {
     pub sync_committee_updates: Vec<Update<MainnetConsensusSpec>>,
     pub finality_update: FinalityUpdate<MainnetConsensusSpec>,
@@ -13,6 +21,7 @@ pub struct ProofInputs {
     pub store: LightClientStore<MainnetConsensusSpec>,
     pub genesis_root: B256,
     pub forks: Forks,
+    pub storage_slots: Vec<StorageSlot>,
 }
 
 #[derive(serde::Serialize, serde::Deserialize, Debug)]
@@ -34,5 +43,6 @@ sol! {
         uint256 prevHead;
         bytes32 syncCommitteeHash;
         bytes32 startSyncCommitteeHash;
+        bytes32[] verifiedStorageSlots;
     }
 }
