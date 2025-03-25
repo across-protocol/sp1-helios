@@ -38,12 +38,19 @@ sol! {
         uint256 public immutable SECONDS_PER_SLOT;
         uint256 public immutable SLOTS_PER_PERIOD;
         uint32 public immutable SOURCE_CHAIN_ID;
-        uint256 public head;
+        uint256 public latestHead;
         mapping(uint256 => bytes32) public syncCommittees;
         mapping(uint256 => bytes32) public executionStateRoots;
         mapping(uint256 => bytes32) public headers;
+        mapping(bytes32 => bytes32) public storageValues;
         bytes32 public heliosProgramVkey;
         address public verifier;
+
+        struct StorageSlot {
+            bytes32 key;
+            bytes32 value;
+            address contractAddress;
+        }
 
         struct ProofOutputs {
             bytes32 executionStateRoot;
@@ -53,15 +60,20 @@ sol! {
             bytes32 prevHeader;
             uint256 prevHead;
             bytes32 syncCommitteeHash;
+            bytes32 startSyncCommitteeHash;
+            StorageSlot[] slots;
         }
 
         event HeadUpdate(uint256 indexed slot, bytes32 indexed root);
         event SyncCommitteeUpdate(uint256 indexed period, bytes32 indexed root);
+        event StorageSlotVerified(uint256 indexed slot, bytes32 indexed key, bytes32 value, address contractAddress);
 
         function update(bytes calldata proof, bytes calldata publicValues) external;
         function getSyncCommitteePeriod(uint256 slot) internal view returns (uint256);
         function getCurrentSlot() internal view returns (uint256);
         function getCurrentEpoch() internal view returns (uint256);
+        function computeStorageKey(uint256 blockNumber, address contractAddress, bytes32 slot) public pure returns (bytes32);
+        function getStorageSlot(uint256 blockNumber, address contractAddress, bytes32 slot) external view returns (bytes32);
     }
 }
 
@@ -104,11 +116,11 @@ impl SP1HeliosOperator {
         let provider = ProviderBuilder::new().on_http(self.rpc_url.clone());
         let contract = SP1Helios::new(self.contract_address, provider);
         let head: u64 = contract
-            .head()
+            .latestHead()
             .call()
             .await
             .unwrap()
-            .head
+            .latestHead
             .try_into()
             .unwrap();
         let period: u64 = contract
@@ -169,6 +181,7 @@ impl SP1HeliosOperator {
             store: client.store.clone(),
             genesis_root: client.config.chain.genesis_root,
             forks: client.config.forks.clone(),
+            storage_slots: Vec::new(),
         };
         let encoded_proof_inputs = serde_cbor::to_vec(&inputs)?;
         stdin.write_slice(&encoded_proof_inputs);
@@ -231,13 +244,13 @@ impl SP1HeliosOperator {
 
             // Get the current slot from the contract
             let slot = contract
-                .head()
+                .latestHead()
                 .call()
                 .await
                 .unwrap_or_else(|e| {
                     panic!("Failed to get head. Are you sure the SP1Helios is deployed to address: {:?}? Error: {:?}", self.contract_address, e)
                 })
-                .head
+                .latestHead
                 .try_into()
                 .unwrap();
 

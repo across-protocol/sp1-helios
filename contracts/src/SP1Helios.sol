@@ -39,6 +39,8 @@ contract SP1Helios {
     /// @notice The address of the guardian
     address public guardian;
 
+    uint256 public latestHead;
+
     struct StorageSlot {
         bytes32 key;
         bytes32 value;
@@ -103,7 +105,7 @@ contract SP1Helios {
         heliosProgramVkey = params.heliosProgramVkey;
         headers[params.head] = params.header;
         executionStateRoots[params.head] = params.executionStateRoot;
-        head = params.head;
+        latestHead = params.head;
         verifier = params.verifier;
         guardian = params.guardian;
     }
@@ -154,6 +156,9 @@ contract SP1Helios {
         }
         // Set new header.
         headers[po.newHead] = po.newHeader;
+        if (latestHead < po.newHead) {
+            latestHead = po.newHead;
+        }
 
         // Check that the new state root hasnt been set already.
         if (
@@ -219,7 +224,7 @@ contract SP1Helios {
 
     /// @notice Gets the current epoch
     function getCurrentEpoch() public view returns (uint256) {
-        return head / SLOTS_PER_EPOCH;
+        return latestHead / SLOTS_PER_EPOCH;
     }
 
     /// @notice Updates the Helios program verification key.

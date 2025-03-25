@@ -39,6 +39,7 @@ async fn main() -> Result<()> {
         store: helios_client.store.clone(),
         genesis_root: helios_client.config.chain.genesis_root,
         forks: helios_client.config.forks.clone(),
+        storage_slots: Vec::new(),
     };
 
     // Write the inputs to the VM
