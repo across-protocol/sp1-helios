@@ -194,7 +194,7 @@ impl SP1HeliosOperator {
     }
 
     /// Relay an update proof to the SP1 Helios contract.
-    async fn relay_update(&self, proof: SP1ProofWithPublicValues) -> Result<()> {
+    async fn relay_update(&self, proof: SP1ProofWithPublicValues, head: u64) -> Result<()> {
         let public_values_bytes = proof.public_values.to_vec();
 
         let wallet_filler = ProviderBuilder::new()
@@ -211,7 +211,7 @@ impl SP1HeliosOperator {
         const NUM_CONFIRMATIONS: u64 = 3;
         const TIMEOUT_SECONDS: u64 = 60;
         let receipt = contract
-            .update(proof.bytes().into(), public_values_bytes.into())
+            .update(proof.bytes().into(), public_values_bytes.into(), head.try_into().unwrap())
             .nonce(nonce)
             .send()
             .await?
@@ -263,7 +263,7 @@ impl SP1HeliosOperator {
             // Request an update
             match self.request_update(client).await {
                 Ok(Some(proof)) => {
-                    self.relay_update(proof).await?;
+                    self.relay_update(proof, slot).await?;
                 }
                 Ok(None) => {
                     // Contract is up to date. Nothing to update.
