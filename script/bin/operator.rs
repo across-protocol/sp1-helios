@@ -68,7 +68,7 @@ sol! {
         event SyncCommitteeUpdate(uint256 indexed period, bytes32 indexed root);
         event StorageSlotVerified(uint256 indexed slot, bytes32 indexed key, bytes32 value, address contractAddress);
 
-        function update(bytes calldata proof, bytes calldata publicValues) external;
+        function update(bytes calldata proof, bytes calldata publicValues, uint256 head) external;
         function getSyncCommitteePeriod(uint256 slot) internal view returns (uint256);
         function getCurrentSlot() internal view returns (uint256);
         function getCurrentEpoch() internal view returns (uint256);
