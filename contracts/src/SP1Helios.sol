@@ -12,6 +12,9 @@ contract SP1Helios {
     uint256 public immutable SLOTS_PER_PERIOD;
     uint256 public immutable SLOTS_PER_EPOCH;
     uint256 public immutable SOURCE_CHAIN_ID;
+    // 2 weeks = 14 days = 1,209,600 seconds
+    // With 12 seconds per slot, max slots behind = 100,800
+    uint256 public constant MAX_ALLOWED_SLOTS_BEHIND = 100800;
 
     modifier onlyGuardian() {
         require(msg.sender == guardian, "Caller is not the guardian");
@@ -92,6 +95,7 @@ contract SP1Helios {
     error InvalidStateRoot(uint256 slot);
     error SyncCommitteeStartMismatch(bytes32 given, bytes32 expected);
     error PreviousHeadNotSet(uint256 slot);
+    error HeadTooOld(uint256 slot, uint256 maxAllowedSlotsBehind);
 
     constructor(InitParams memory params) {
         GENESIS_VALIDATORS_ROOT = params.genesisValidatorsRoot;
@@ -120,6 +124,11 @@ contract SP1Helios {
     ) external {
         if (headers[head] == bytes32(0)) {
             revert PreviousHeadNotSet(head);
+        }
+
+        // Check if the head being proved against is more than 2 weeks old
+        if (latestHead - head > MAX_ALLOWED_SLOTS_BEHIND) {
+            revert HeadTooOld(head, MAX_ALLOWED_SLOTS_BEHIND);
         }
 
         // Parse the outputs from the committed public values associated with the proof.
