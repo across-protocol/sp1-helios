@@ -95,7 +95,7 @@ contract SP1Helios {
     error InvalidStateRoot(uint256 slot);
     error SyncCommitteeStartMismatch(bytes32 given, bytes32 expected);
     error PreviousHeadNotSet(uint256 slot);
-    error HeadTooOld(uint256 slot, uint256 maxAllowedSlotsBehind);
+    error HeadTooOld(uint256 slot, uint256 currentHead);
 
     constructor(InitParams memory params) {
         GENESIS_VALIDATORS_ROOT = params.genesisValidatorsRoot;
@@ -128,7 +128,7 @@ contract SP1Helios {
 
         // Check if the head being proved against is more than 2 weeks old
         if (latestHead - head > MAX_ALLOWED_SLOTS_BEHIND) {
-            revert HeadTooOld(head, MAX_ALLOWED_SLOTS_BEHIND);
+            revert HeadTooOld(head, latestHead);
         }
 
         // Parse the outputs from the committed public values associated with the proof.
