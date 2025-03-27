@@ -12,8 +12,13 @@ contract SP1Helios {
     uint256 public immutable SLOTS_PER_PERIOD;
     uint256 public immutable SLOTS_PER_EPOCH;
     uint256 public immutable SOURCE_CHAIN_ID;
-    // 2 weeks = 14 days = 1,209,600 seconds
-    // With 12 seconds per slot, max slots behind = 100,800
+    /// @notice Maximum number of slots behind the latest head that can be used for proving
+    /// @dev This is set to 2 weeks (100,800 slots) to prevent timing attacks where malicious validators
+    /// could create forks that diverge from the canonical chain. While Ethereum's slashing period is
+    /// actually 32 epochs (about 3.4 hours), we use a more conservative 2-week window to ensure
+    /// sufficient time for network participants to detect and respond to potential attacks.
+    /// This prevents an attacker from creating a fork using state roots from blocks older than
+    /// 2 weeks, which could be used to make an invalid fork appear valid.
     uint256 public constant MAX_ALLOWED_SLOTS_BEHIND = 100800;
 
     modifier onlyGuardian() {
