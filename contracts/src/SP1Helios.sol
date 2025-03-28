@@ -12,14 +12,12 @@ contract SP1Helios {
     uint256 public immutable SLOTS_PER_PERIOD;
     uint256 public immutable SLOTS_PER_EPOCH;
     uint256 public immutable SOURCE_CHAIN_ID;
-    /// @notice Maximum number of slots behind the latest head that can be used for proving
-    /// @dev This is set to 2 weeks (100,800 slots) to prevent timing attacks where malicious validators
-    /// could create forks that diverge from the canonical chain. While Ethereum's slashing period is
-    /// actually 32 epochs (about 3.4 hours), we use a more conservative 2-week window to ensure
-    /// sufficient time for network participants to detect and respond to potential attacks.
-    /// This prevents an attacker from creating a fork using state roots from blocks older than
-    /// 2 weeks, which could be used to make an invalid fork appear valid.
-    uint256 public constant MAX_ALLOWED_SLOTS_BEHIND = 100800;
+
+    /// @notice Maximum number of time behind current timestamp for a block to be used for proving
+    /// @dev This is set to 1 week to prevent timing attacks where malicious validators
+    /// could retroactively create forks that diverge from the canonical chain. To minimize this
+    /// risk, we limit the maximum age of a block to 1 week.
+    uint256 public constant MAX_SLOT_AGE = 1 weeks;
 
     modifier onlyGuardian() {
         require(msg.sender == guardian, "Caller is not the guardian");
@@ -131,8 +129,8 @@ contract SP1Helios {
             revert PreviousHeadNotSet(head);
         }
 
-        // Check if the head being proved against is more than 2 weeks old
-        if (latestHead - head > MAX_ALLOWED_SLOTS_BEHIND) {
+        // Check if the head being proved against is older than allowed.
+        if (block.timestamp - slotTimestamp(head) > MAX_SLOT_AGE) {
             revert HeadTooOld(head, latestHead);
         }
 
@@ -244,6 +242,10 @@ contract SP1Helios {
     /// @notice Updates the Helios program verification key.
     function updateHeliosProgramVkey(bytes32 newVkey) external onlyGuardian {
         heliosProgramVkey = newVkey;
+    }
+
+    function slotTimestamp(uint256 slot) public view returns (uint256) {
+        return GENESIS_TIME + slot * SECONDS_PER_SLOT;
     }
 
     /// @notice Computes the key for a contract's storage slot
