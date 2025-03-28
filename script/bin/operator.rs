@@ -38,7 +38,7 @@ sol! {
         uint256 public immutable SECONDS_PER_SLOT;
         uint256 public immutable SLOTS_PER_PERIOD;
         uint32 public immutable SOURCE_CHAIN_ID;
-        uint256 public latestHead;
+        uint256 public head;
         mapping(uint256 => bytes32) public syncCommittees;
         mapping(uint256 => bytes32) public executionStateRoots;
         mapping(uint256 => bytes32) public headers;
@@ -116,11 +116,11 @@ impl SP1HeliosOperator {
         let provider = ProviderBuilder::new().on_http(self.rpc_url.clone());
         let contract = SP1Helios::new(self.contract_address, provider);
         let head: u64 = contract
-            .latestHead()
+            .head()
             .call()
             .await
             .unwrap()
-            .latestHead
+            .head
             .try_into()
             .unwrap();
         let period: u64 = contract
@@ -211,7 +211,11 @@ impl SP1HeliosOperator {
         const NUM_CONFIRMATIONS: u64 = 3;
         const TIMEOUT_SECONDS: u64 = 60;
         let receipt = contract
-            .update(proof.bytes().into(), public_values_bytes.into(), head.try_into().unwrap())
+            .update(
+                proof.bytes().into(),
+                public_values_bytes.into(),
+                head.try_into().unwrap(),
+            )
             .nonce(nonce)
             .send()
             .await?
@@ -244,13 +248,13 @@ impl SP1HeliosOperator {
 
             // Get the current slot from the contract
             let slot = contract
-                .latestHead()
+                .head()
                 .call()
                 .await
                 .unwrap_or_else(|e| {
                     panic!("Failed to get head. Are you sure the SP1Helios is deployed to address: {:?}? Error: {:?}", self.contract_address, e)
                 })
-                .latestHead
+                .head
                 .try_into()
                 .unwrap();
 
