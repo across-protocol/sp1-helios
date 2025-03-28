@@ -13,6 +13,12 @@ contract SP1Helios {
     uint256 public immutable SLOTS_PER_EPOCH;
     uint256 public immutable SOURCE_CHAIN_ID;
 
+    /// @notice Maximum number of time behind current timestamp for a block to be used for proving
+    /// @dev This is set to 1 week to prevent timing attacks where malicious validators
+    /// could retroactively create forks that diverge from the canonical chain. To minimize this
+    /// risk, we limit the maximum age of a block to 1 week.
+    uint256 public constant MAX_SLOT_AGE = 1 weeks;
+
     modifier onlyGuardian() {
         require(msg.sender == guardian, "Caller is not the guardian");
         _;
@@ -92,6 +98,7 @@ contract SP1Helios {
     error InvalidStateRoot(uint256 slot);
     error SyncCommitteeStartMismatch(bytes32 given, bytes32 expected);
     error PreviousHeadNotSet(uint256 slot);
+    error HeadTooOld(uint256 slot, uint256 currentHead);
 
     constructor(InitParams memory params) {
         GENESIS_VALIDATORS_ROOT = params.genesisValidatorsRoot;
@@ -120,6 +127,11 @@ contract SP1Helios {
     ) external {
         if (headers[head] == bytes32(0)) {
             revert PreviousHeadNotSet(head);
+        }
+
+        // Check if the head being proved against is older than allowed.
+        if (block.timestamp - slotTimestamp(head) > MAX_SLOT_AGE) {
+            revert HeadTooOld(head, latestHead);
         }
 
         // Parse the outputs from the committed public values associated with the proof.
@@ -230,6 +242,10 @@ contract SP1Helios {
     /// @notice Updates the Helios program verification key.
     function updateHeliosProgramVkey(bytes32 newVkey) external onlyGuardian {
         heliosProgramVkey = newVkey;
+    }
+
+    function slotTimestamp(uint256 slot) public view returns (uint256) {
+        return GENESIS_TIME + slot * SECONDS_PER_SLOT;
     }
 
     /// @notice Computes the key for a contract's storage slot
