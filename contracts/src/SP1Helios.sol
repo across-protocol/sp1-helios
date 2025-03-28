@@ -24,6 +24,9 @@ contract SP1Helios {
         _;
     }
 
+    /// @notice The latest slot the light client has a finalized header for.
+    uint256 public head;
+
     /// @notice Maps from a slot to a beacon block header root.
     mapping(uint256 => bytes32) public headers;
 
@@ -44,8 +47,6 @@ contract SP1Helios {
 
     /// @notice The address of the guardian
     address public guardian;
-
-    uint256 public head;
 
     struct StorageSlot {
         bytes32 key;
