@@ -45,7 +45,7 @@ contract SP1Helios {
     /// @notice The address of the guardian
     address public guardian;
 
-    uint256 public latestHead;
+    uint256 public head;
 
     struct StorageSlot {
         bytes32 key;
@@ -98,7 +98,7 @@ contract SP1Helios {
     error InvalidStateRoot(uint256 slot);
     error SyncCommitteeStartMismatch(bytes32 given, bytes32 expected);
     error PreviousHeadNotSet(uint256 slot);
-    error HeadTooOld(uint256 slot, uint256 currentHead);
+    error PreviousHeadTooOld(uint256 slot);
 
     constructor(InitParams memory params) {
         GENESIS_VALIDATORS_ROOT = params.genesisValidatorsRoot;
@@ -112,7 +112,7 @@ contract SP1Helios {
         heliosProgramVkey = params.heliosProgramVkey;
         headers[params.head] = params.header;
         executionStateRoots[params.head] = params.executionStateRoot;
-        latestHead = params.head;
+        head = params.head;
         verifier = params.verifier;
         guardian = params.guardian;
     }
@@ -120,27 +120,28 @@ contract SP1Helios {
     /// @notice Updates the light client with a new header, execution state root, and sync committee (if changed)
     /// @param proof The proof bytes for the SP1 proof.
     /// @param publicValues The public commitments from the SP1 proof.
+    /// @param fromHead The head slot to prove against.
     function update(
         bytes calldata proof,
         bytes calldata publicValues,
-        uint256 head
+        uint256 fromHead
     ) external {
-        if (headers[head] == bytes32(0)) {
-            revert PreviousHeadNotSet(head);
+        if (headers[fromHead] == bytes32(0)) {
+            revert PreviousHeadNotSet(fromHead);
         }
 
         // Check if the head being proved against is older than allowed.
-        if (block.timestamp - slotTimestamp(head) > MAX_SLOT_AGE) {
-            revert HeadTooOld(head, latestHead);
+        if (block.timestamp - slotTimestamp(fromHead) > MAX_SLOT_AGE) {
+            revert PreviousHeadTooOld(fromHead);
         }
 
         // Parse the outputs from the committed public values associated with the proof.
         ProofOutputs memory po = abi.decode(publicValues, (ProofOutputs));
-        if (po.newHead < head) {
+        if (po.newHead < fromHead) {
             revert SlotBehindHead(po.newHead);
         }
 
-        uint256 currentPeriod = getSyncCommitteePeriod(head);
+        uint256 currentPeriod = getSyncCommitteePeriod(fromHead);
 
         // Note: We should always have a sync committee for the current head.
         // The "start" sync committee hash is the hash of the sync committee that should sign the next update.
@@ -168,8 +169,8 @@ contract SP1Helios {
         }
         // Set new header.
         headers[po.newHead] = po.newHeader;
-        if (latestHead < po.newHead) {
-            latestHead = po.newHead;
+        if (head < po.newHead) {
+            head = po.newHead;
         }
 
         // Check that the new state root hasnt been set already.
@@ -236,7 +237,7 @@ contract SP1Helios {
 
     /// @notice Gets the current epoch
     function getCurrentEpoch() public view returns (uint256) {
-        return latestHead / SLOTS_PER_EPOCH;
+        return head / SLOTS_PER_EPOCH;
     }
 
     /// @notice Updates the Helios program verification key.
@@ -244,8 +245,14 @@ contract SP1Helios {
         heliosProgramVkey = newVkey;
     }
 
+    /// @notice Gets the timestamp of a slot
     function slotTimestamp(uint256 slot) public view returns (uint256) {
         return GENESIS_TIME + slot * SECONDS_PER_SLOT;
+    }
+
+    /// @notice Gets the timestamp of the latest head
+    function headTimestamp() public view returns (uint256) {
+        return slotTimestamp(head);
     }
 
     /// @notice Computes the key for a contract's storage slot
