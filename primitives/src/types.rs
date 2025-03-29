@@ -1,5 +1,6 @@
-use alloy_primitives::B256;
+use alloy_primitives::{Address, B256};
 use alloy_sol_types::sol;
+use alloy_trie::TrieAccount;
 use helios_consensus_core::consensus_spec::MainnetConsensusSpec;
 use helios_consensus_core::types::Forks;
 use helios_consensus_core::types::{FinalityUpdate, LightClientStore, Update};
@@ -7,10 +8,17 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Serialize, Deserialize, Debug)]
 pub struct StorageSlot {
-    pub address: B256,
-    pub slot: B256,
-    pub proof: Vec<B256>,
-    pub expected_value: B256,
+    pub key: B256,            // raw 32 byte storage slot key e.g. for slot 0: 0x000...00
+    pub expected_value: B256, // raw `keccak256(abi.encode(target, data));` that we store in `HubPool.sol`
+    pub mpt_proof: Vec<B256>, // contract-specific MPT proof
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+pub struct ContractStorage {
+    pub address: Address,
+    pub expected_value: TrieAccount,
+    pub mpt_proof: Vec<B256>, // global MPT proof
+    pub storage_slots: Vec<StorageSlot>,
 }
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -21,7 +29,7 @@ pub struct ProofInputs {
     pub store: LightClientStore<MainnetConsensusSpec>,
     pub genesis_root: B256,
     pub forks: Forks,
-    pub storage_slots: Vec<StorageSlot>,
+    pub contract_storage_slots: ContractStorage,
 }
 
 #[derive(serde::Serialize, serde::Deserialize, Debug)]

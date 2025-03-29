@@ -1,7 +1,7 @@
 use anyhow::Result;
 use clap::{command, Parser};
 use helios_ethereum::rpc::ConsensusRpc;
-use sp1_helios_primitives::types::ProofInputs;
+use sp1_helios_primitives::types::{ContractStorage, ProofInputs};
 use sp1_helios_script::{get_checkpoint, get_client, get_latest_checkpoint, get_updates};
 use sp1_sdk::{utils::setup_logger, ProverClient, SP1Stdin};
 
@@ -39,7 +39,12 @@ async fn main() -> Result<()> {
         store: helios_client.store.clone(),
         genesis_root: helios_client.config.chain.genesis_root,
         forks: helios_client.config.forks.clone(),
-        storage_slots: Vec::new(),
+        contract_storage_slots: ContractStorage {
+            address: todo!(),
+            expected_value: todo!(),
+            mpt_proof: todo!(),
+            storage_slots: todo!(),
+        },
     };
 
     // Write the inputs to the VM
