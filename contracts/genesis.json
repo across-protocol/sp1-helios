@@ -5,7 +5,7 @@
   "guardian": "0x77349640ef922e919d14e24692be1ee38dbfde54",
   "head": 11349408,
   "header": "0x3262d85ccc58ea8d41b69c779bfa5672ab34058a251bfd4b4ea8cd90122c7914",
-  "heliosProgramVkey": "0x00d51009f4424fb6528a26b854713af2c62cdcc2d459d1b38bf4fa14a255107a",
+  "heliosProgramVkey": "0x005b36529a91cf26aca076f004673c457efbbd34ccb19bf4d8f90d395e17027c",
   "secondsPerSlot": 12,
   "slotsPerEpoch": 32,
   "slotsPerPeriod": 8192,

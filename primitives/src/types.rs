@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 #[derive(Serialize, Deserialize, Debug)]
 pub struct StorageSlot {
     pub key: B256,            // raw 32 byte storage slot key e.g. for slot 0: 0x000...00
-    pub expected_value: B256, // raw `keccak256(abi.encode(target, data));` that we store in `HubPool.sol`
+    pub expected_value: B256, // raw `keccak256(abi.encode(target, data));` that we store in `HubPoolStore.sol`
     pub mpt_proof: Vec<B256>, // contract-specific MPT proof
 }
 
