@@ -95,8 +95,7 @@ async fn main() -> Result<()> {
 
     // Write the inputs to the VM
     let mut stdin = SP1Stdin::new();
-    let encoded_inputs = serde_cbor::to_vec(&inputs)?;
-    stdin.write_slice(&encoded_inputs);
+    stdin.write_slice(&serde_cbor::to_vec(&inputs)?);
 
     // Configure a ProverClient for testing
     let prover_client = ProverClient::builder().cpu().build();
