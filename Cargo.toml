@@ -1,5 +1,5 @@
 [workspace]
-members = ["primitives", "script", "program"]
+members = ["primitives", "script", "program", "test"]
 resolver = "2"
 
 [workspace.package]

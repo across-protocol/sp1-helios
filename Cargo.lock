@@ -6135,6 +6135,32 @@ dependencies = [
 ]
 
 [[package]]
+name = "sp1-helios-test"
+version = "0.1.0"
+dependencies = [
+ "alloy",
+ "alloy-primitives",
+ "alloy-rlp",
+ "alloy-trie",
+ "anyhow",
+ "cargo_metadata",
+ "clap",
+ "dotenv",
+ "env_logger",
+ "helios-consensus-core",
+ "helios-ethereum",
+ "log",
+ "reqwest",
+ "serde",
+ "serde_cbor",
+ "serde_json",
+ "sp1-helios-primitives",
+ "sp1-sdk",
+ "tokio",
+ "tree_hash",
+]
+
+[[package]]
 name = "sp1-lib"
 version = "4.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
