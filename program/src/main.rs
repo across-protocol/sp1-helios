@@ -77,8 +77,6 @@ pub fn main() {
         .expect("Execution payload doesn't exist.")
         .state_root();
 
-    println!("lalala {}", store.finalized_header.beacon().slot);
-
     let verified_slots = verify_storage_slot_proofs(execution_state_root, contract_storage_slots);
 
     // 4. Commit new state root, header, and sync committee for usage in the on-chain contract
@@ -117,8 +115,6 @@ fn verify_storage_slot_proofs(
     contract_storage
         .expected_value
         .encode(&mut rlp_encoded_trie_account);
-
-    let hash = keccak256(rlp_encoded_trie_account.clone());
 
     // 1) Verify the contract's account node in the *global* MPT:
     //    We expect to find 'contract_trie_value_bytes' as the 'value' for this address.
