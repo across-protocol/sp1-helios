@@ -2,7 +2,7 @@ use alloy::{
     eips::BlockId,
     providers::{Provider, ProviderBuilder},
 };
-use alloy_primitives::{address, b256, hex, Bytes, B256};
+use alloy_primitives::{address, b256, U256};
 use alloy_trie::TrieAccount;
 use anyhow::Result;
 use clap::{command, Parser};
@@ -10,7 +10,6 @@ use helios_ethereum::rpc::ConsensusRpc;
 use sp1_helios_primitives::types::{ContractStorage, ProofInputs, StorageSlot};
 use sp1_helios_script::{get_checkpoint, get_client, get_latest_checkpoint, get_updates};
 use sp1_sdk::{utils::setup_logger, ProverClient, SP1Stdin};
-use std::str::FromStr;
 
 const ELF: &[u8] = include_bytes!("../../elf/sp1-helios-elf");
 #[derive(Parser, Debug, Clone)]
@@ -48,16 +47,10 @@ async fn main() -> Result<()> {
         .unwrap()
         .block_number();
 
-    println!(
-        "slot {}",
-        helios_client.store.finalized_header.beacon().slot
-    );
-    println!("block number {}", block_number);
-
     // Expected values for the proof (mainnet Across SpokePool->crossDomainAdmin()).
-    let contract_address = address!("0xcf340c078e4909f1796b28a78f35db9d60842cfb");
+    let contract_address = address!("0x5c7BCd6E7De5423a257D81B442095A1a6ced35C5");
     let storage_slot = b256!("0000000000000000000000000000000000000000000000000000000000000869");
-    let expected_value = b256!("c186fA914353c44b2E33eBE05f21846F1048bEda000000000000000000000000");
+    let expected_value = address!("c186fA914353c44b2E33eBE05f21846F1048bEda");
 
     // Setup execution RPC client
     let execution_rpc = std::env::var("SOURCE_EXECUTION_RPC_URL").unwrap();
@@ -87,7 +80,7 @@ async fn main() -> Result<()> {
             mpt_proof: proof.account_proof,
             storage_slots: vec![StorageSlot {
                 key: storage_slot,
-                expected_value,
+                expected_value: U256::from_be_slice(expected_value.as_slice()),
                 mpt_proof: proof.storage_proof[0].proof.clone(),
             }],
         },
