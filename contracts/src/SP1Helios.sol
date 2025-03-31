@@ -2,10 +2,11 @@
 pragma solidity ^0.8.22;
 
 import {ISP1Verifier} from "@sp1-contracts/ISP1Verifier.sol";
+import {AccessControlEnumerable} from "@openzeppelin/access/extensions/AccessControlEnumerable.sol";
 
 /// @title SP1Helios
 /// @notice An Ethereum beacon chain light client, built with SP1 and Helios.
-contract SP1Helios {
+contract SP1Helios is AccessControlEnumerable {
     bytes32 public immutable GENESIS_VALIDATORS_ROOT;
     uint256 public immutable GENESIS_TIME;
     uint256 public immutable SECONDS_PER_SLOT;
@@ -13,16 +14,14 @@ contract SP1Helios {
     uint256 public immutable SLOTS_PER_EPOCH;
     uint256 public immutable SOURCE_CHAIN_ID;
 
+    /// @notice Role for updater operations
+    bytes32 public constant UPDATER_ROLE = keccak256("UPDATER_ROLE");
+
     /// @notice Maximum number of time behind current timestamp for a block to be used for proving
     /// @dev This is set to 1 week to prevent timing attacks where malicious validators
     /// could retroactively create forks that diverge from the canonical chain. To minimize this
     /// risk, we limit the maximum age of a block to 1 week.
     uint256 public constant MAX_SLOT_AGE = 1 weeks;
-
-    modifier onlyGuardian() {
-        require(msg.sender == guardian, "Caller is not the guardian");
-        _;
-    }
 
     /// @notice The latest slot the light client has a finalized header for.
     uint256 public head;
@@ -40,13 +39,10 @@ contract SP1Helios {
     mapping(bytes32 => bytes32) public storageValues;
 
     /// @notice The verification key for the SP1 Helios program.
-    bytes32 public heliosProgramVkey;
+    bytes32 public immutable heliosProgramVkey;
 
     /// @notice The deployed SP1 verifier contract.
-    address public verifier;
-
-    /// @notice The address of the guardian
-    address public guardian;
+    address public immutable verifier;
 
     struct StorageSlot {
         bytes32 key;
@@ -72,7 +68,6 @@ contract SP1Helios {
         bytes32 executionStateRoot;
         uint256 genesisTime;
         bytes32 genesisValidatorsRoot;
-        address guardian;
         uint256 head;
         bytes32 header;
         bytes32 heliosProgramVkey;
@@ -82,13 +77,19 @@ contract SP1Helios {
         uint256 sourceChainId;
         bytes32 syncCommitteeHash;
         address verifier;
+        address[] initialUpdaters;
     }
 
     event HeadUpdate(uint256 indexed slot, bytes32 indexed root);
     event SyncCommitteeUpdate(uint256 indexed period, bytes32 indexed root);
     event StorageSlotVerified(
-        uint256 indexed head, bytes32 indexed key, bytes32 value, address contractAddress
+        uint256 indexed head,
+        bytes32 indexed key,
+        bytes32 value,
+        address contractAddress
     );
+    event UpdaterAdded(address indexed updater);
+    event UpdaterRemoved(address indexed updater);
 
     error SlotBehindHead(uint256 slot);
     error SyncCommitteeAlreadySet(uint256 period);
@@ -97,6 +98,8 @@ contract SP1Helios {
     error SyncCommitteeStartMismatch(bytes32 given, bytes32 expected);
     error PreviousHeadNotSet(uint256 slot);
     error PreviousHeadTooOld(uint256 slot);
+    error CannotRemoveLastUpdater();
+    error NoInitialUpdatersProvided();
 
     constructor(InitParams memory params) {
         GENESIS_VALIDATORS_ROOT = params.genesisValidatorsRoot;
@@ -105,20 +108,41 @@ contract SP1Helios {
         SLOTS_PER_PERIOD = params.slotsPerPeriod;
         SLOTS_PER_EPOCH = params.slotsPerEpoch;
         SOURCE_CHAIN_ID = params.sourceChainId;
-        syncCommittees[getSyncCommitteePeriod(params.head)] = params.syncCommitteeHash;
+        syncCommittees[getSyncCommitteePeriod(params.head)] = params
+            .syncCommitteeHash;
         heliosProgramVkey = params.heliosProgramVkey;
         headers[params.head] = params.header;
         executionStateRoots[params.head] = params.executionStateRoot;
         head = params.head;
         verifier = params.verifier;
-        guardian = params.guardian;
+
+        // Make sure at least one initial updater is provided
+        if (params.initialUpdaters.length == 0) {
+            revert NoInitialUpdatersProvided();
+        }
+        
+        // Set UPDATER_ROLE as its own admin
+        _setRoleAdmin(UPDATER_ROLE, UPDATER_ROLE);
+        
+        // Add all initial updaters
+        for (uint256 i = 0; i < params.initialUpdaters.length; i++) {
+            address updater = params.initialUpdaters[i];
+            if (updater != address(0)) {
+                _grantRole(UPDATER_ROLE, updater);
+                emit UpdaterAdded(updater);
+            }
+        }
     }
 
     /// @notice Updates the light client with a new header, execution state root, and sync committee (if changed)
     /// @param proof The proof bytes for the SP1 proof.
     /// @param publicValues The public commitments from the SP1 proof.
     /// @param fromHead The head slot to prove against.
-    function update(bytes calldata proof, bytes calldata publicValues, uint256 fromHead) external {
+    function update(
+        bytes calldata proof,
+        bytes calldata publicValues,
+        uint256 fromHead
+    ) external onlyRole(UPDATER_ROLE) {
         if (headers[fromHead] == bytes32(0)) {
             revert PreviousHeadNotSet(fromHead);
         }
@@ -140,14 +164,24 @@ contract SP1Helios {
         // The "start" sync committee hash is the hash of the sync committee that should sign the next update.
         bytes32 currentSyncCommitteeHash = syncCommittees[currentPeriod];
         if (currentSyncCommitteeHash != po.startSyncCommitteeHash) {
-            revert SyncCommitteeStartMismatch(po.startSyncCommitteeHash, currentSyncCommitteeHash);
+            revert SyncCommitteeStartMismatch(
+                po.startSyncCommitteeHash,
+                currentSyncCommitteeHash
+            );
         }
 
         // Verify the proof with the associated public values. This will revert if proof invalid.
-        ISP1Verifier(verifier).verifyProof(heliosProgramVkey, publicValues, proof);
+        ISP1Verifier(verifier).verifyProof(
+            heliosProgramVkey,
+            publicValues,
+            proof
+        );
 
         // Check that the new header hasnt been set already.
-        if (headers[po.newHead] != bytes32(0) && headers[po.newHead] != po.newHeader) {
+        if (
+            headers[po.newHead] != bytes32(0) &&
+            headers[po.newHead] != po.newHeader
+        ) {
             revert InvalidHeaderRoot(po.newHead);
         }
         // Set new header.
@@ -158,8 +192,8 @@ contract SP1Helios {
 
         // Check that the new state root hasnt been set already.
         if (
-            executionStateRoots[po.newHead] != bytes32(0)
-                && executionStateRoots[po.newHead] != po.executionStateRoot
+            executionStateRoots[po.newHead] != bytes32(0) &&
+            executionStateRoots[po.newHead] != po.executionStateRoot
         ) {
             revert InvalidStateRoot(po.newHead);
         }
@@ -171,9 +205,18 @@ contract SP1Helios {
         // Store all provided storage slot values
         for (uint256 i = 0; i < po.slots.length; i++) {
             StorageSlot memory slot = po.slots[i];
-            bytes32 storageKey = computeStorageKey(po.newHead, slot.contractAddress, slot.key);
+            bytes32 storageKey = computeStorageKey(
+                po.newHead,
+                slot.contractAddress,
+                slot.key
+            );
             storageValues[storageKey] = slot.value;
-            emit StorageSlotVerified(po.newHead, slot.key, slot.value, slot.contractAddress);
+            emit StorageSlotVerified(
+                po.newHead,
+                slot.key,
+                slot.value,
+                slot.contractAddress
+            );
         }
 
         uint256 period = getSyncCommitteePeriod(po.newHead);
@@ -203,7 +246,9 @@ contract SP1Helios {
     }
 
     /// @notice Gets the sync committee period from a slot.
-    function getSyncCommitteePeriod(uint256 slot) public view returns (uint256) {
+    function getSyncCommitteePeriod(
+        uint256 slot
+    ) public view returns (uint256) {
         return slot / SLOTS_PER_PERIOD;
     }
 
@@ -212,11 +257,23 @@ contract SP1Helios {
         return head / SLOTS_PER_EPOCH;
     }
 
-    /// @notice Updates the Helios program verification key.
-    function updateHeliosProgramVkey(bytes32 newVkey) external onlyGuardian {
-        heliosProgramVkey = newVkey;
+    /// @notice Add a new authorized updater
+    /// @param updater The address to grant the updater role to
+    function addUpdater(address updater) external onlyRole(UPDATER_ROLE) {
+        grantRole(UPDATER_ROLE, updater);
+        emit UpdaterAdded(updater);
     }
 
+    /// @notice Remove an authorized updater
+    /// @param updater The address to revoke the updater role from
+    function removeUpdater(address updater) external onlyRole(UPDATER_ROLE) {
+        // Prevent removal of the last updater
+        if (getRoleMemberCount(UPDATER_ROLE) <= 1 && updater == msg.sender) {
+            revert CannotRemoveLastUpdater();
+        }
+        revokeRole(UPDATER_ROLE, updater);
+        emit UpdaterRemoved(updater);
+    }
     /// @notice Gets the timestamp of a slot
     function slotTimestamp(uint256 slot) public view returns (uint256) {
         return GENESIS_TIME + slot * SECONDS_PER_SLOT;
@@ -228,20 +285,23 @@ contract SP1Helios {
     }
 
     /// @notice Computes the key for a contract's storage slot
-    function computeStorageKey(uint256 blockNumber, address contractAddress, bytes32 slot)
-        public
-        pure
-        returns (bytes32)
-    {
+    function computeStorageKey(
+        uint256 blockNumber,
+        address contractAddress,
+        bytes32 slot
+    ) public pure returns (bytes32) {
         return keccak256(abi.encodePacked(blockNumber, contractAddress, slot));
     }
 
     /// @notice Gets the value of a storage slot at a specific block
-    function getStorageSlot(uint256 blockNumber, address contractAddress, bytes32 slot)
-        external
-        view
-        returns (bytes32)
-    {
-        return storageValues[computeStorageKey(blockNumber, contractAddress, slot)];
+    function getStorageSlot(
+        uint256 blockNumber,
+        address contractAddress,
+        bytes32 slot
+    ) external view returns (bytes32) {
+        return
+            storageValues[
+                computeStorageKey(blockNumber, contractAddress, slot)
+            ];
     }
 }
