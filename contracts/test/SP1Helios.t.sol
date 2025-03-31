@@ -56,10 +56,7 @@ contract SP1HeliosTest is Test {
         assertEq(helios.heliosProgramVkey(), HELIOS_PROGRAM_VKEY);
         assertEq(helios.head(), INITIAL_HEAD);
         assertEq(helios.headers(INITIAL_HEAD), INITIAL_HEADER);
-        assertEq(
-            helios.executionStateRoots(INITIAL_HEAD),
-            INITIAL_EXECUTION_STATE_ROOT
-        );
+        assertEq(helios.executionStateRoots(INITIAL_HEAD), INITIAL_EXECUTION_STATE_ROOT);
         assertEq(
             helios.syncCommittees(helios.getSyncCommitteePeriod(INITIAL_HEAD)),
             INITIAL_SYNC_COMMITTEE_HASH
@@ -86,10 +83,7 @@ contract SP1HeliosTest is Test {
 
     function testSlotTimestamp() public view {
         uint256 slot = 1000;
-        assertEq(
-            helios.slotTimestamp(slot),
-            GENESIS_TIME + slot * SECONDS_PER_SLOT
-        );
+        assertEq(helios.slotTimestamp(slot), GENESIS_TIME + slot * SECONDS_PER_SLOT);
     }
 
     function validateSlotMath() public view {
@@ -106,10 +100,7 @@ contract SP1HeliosTest is Test {
     }
 
     function testHeadTimestamp() public view {
-        assertEq(
-            helios.headTimestamp(),
-            GENESIS_TIME + INITIAL_HEAD * SECONDS_PER_SLOT
-        );
+        assertEq(helios.headTimestamp(), GENESIS_TIME + INITIAL_HEAD * SECONDS_PER_SLOT);
     }
 
     function testComputeStorageKey() public view {
@@ -117,13 +108,8 @@ contract SP1HeliosTest is Test {
         address contractAddress = address(0xabc);
         bytes32 slot = bytes32(uint256(456));
 
-        bytes32 expectedKey = keccak256(
-            abi.encodePacked(blockNumber, contractAddress, slot)
-        );
-        assertEq(
-            helios.computeStorageKey(blockNumber, contractAddress, slot),
-            expectedKey
-        );
+        bytes32 expectedKey = keccak256(abi.encodePacked(blockNumber, contractAddress, slot));
+        assertEq(helios.computeStorageKey(blockNumber, contractAddress, slot), expectedKey);
     }
 
     function testGetStorageSlot() public {
@@ -132,11 +118,7 @@ contract SP1HeliosTest is Test {
         bytes32 slot = bytes32(uint256(456));
         bytes32 value = bytes32(uint256(789));
 
-        bytes32 storageKey = helios.computeStorageKey(
-            blockNumber,
-            contractAddress,
-            slot
-        );
+        bytes32 storageKey = helios.computeStorageKey(blockNumber, contractAddress, slot);
 
         // Simulate an update that would set this storage value
         vm.startPrank(address(helios));
@@ -147,10 +129,7 @@ contract SP1HeliosTest is Test {
         );
         vm.stopPrank();
 
-        assertEq(
-            helios.getStorageSlot(blockNumber, contractAddress, slot),
-            value
-        );
+        assertEq(helios.getStorageSlot(blockNumber, contractAddress, slot), value);
     }
 
     function testUpdateHeliosProgramVkey() public {
@@ -222,13 +201,10 @@ contract SP1HeliosTest is Test {
         emit SP1Helios.HeadUpdate(newHead, newHeader);
 
         // Expect events for all storage slots
-        for (uint i = 0; i < slots.length; i++) {
+        for (uint256 i = 0; i < slots.length; i++) {
             vm.expectEmit(true, true, false, true);
             emit SP1Helios.StorageSlotVerified(
-                newHead,
-                slots[i].key,
-                slots[i].value,
-                slots[i].contractAddress
+                newHead, slots[i].key, slots[i].value, slots[i].contractAddress
             );
         }
 
@@ -240,21 +216,11 @@ contract SP1HeliosTest is Test {
         assertEq(helios.executionStateRoots(newHead), newExecutionStateRoot);
 
         // Verify all storage slots were set correctly
-        for (uint i = 0; i < slots.length; i++) {
+        for (uint256 i = 0; i < slots.length; i++) {
             assertEq(
-                helios.getStorageSlot(
-                    newHead,
-                    slots[i].contractAddress,
-                    slots[i].key
-                ),
+                helios.getStorageSlot(newHead, slots[i].contractAddress, slots[i].key),
                 slots[i].value,
-                string(
-                    abi.encodePacked(
-                        "Storage slot ",
-                        i,
-                        " was not set correctly"
-                    )
-                )
+                string(abi.encodePacked("Storage slot ", i, " was not set correctly"))
             );
         }
 
@@ -285,10 +251,7 @@ contract SP1HeliosTest is Test {
         bytes memory proof = new bytes(0);
 
         vm.expectRevert(
-            abi.encodeWithSelector(
-                SP1Helios.PreviousHeadNotSet.selector,
-                nonExistentHead
-            )
+            abi.encodeWithSelector(SP1Helios.PreviousHeadNotSet.selector, nonExistentHead)
         );
         helios.update(proof, publicValues, nonExistentHead);
     }
@@ -314,12 +277,7 @@ contract SP1HeliosTest is Test {
         bytes memory publicValues = abi.encode(po);
         bytes memory proof = new bytes(0);
 
-        vm.expectRevert(
-            abi.encodeWithSelector(
-                SP1Helios.PreviousHeadTooOld.selector,
-                INITIAL_HEAD
-            )
-        );
+        vm.expectRevert(abi.encodeWithSelector(SP1Helios.PreviousHeadTooOld.selector, INITIAL_HEAD));
         helios.update(proof, publicValues, INITIAL_HEAD);
     }
 
@@ -346,9 +304,7 @@ contract SP1HeliosTest is Test {
         // Set block timestamp to be valid for the update
         vm.warp(helios.slotTimestamp(INITIAL_HEAD) + 1 hours);
 
-        vm.expectRevert(
-            abi.encodeWithSelector(SP1Helios.SlotBehindHead.selector, newHead)
-        );
+        vm.expectRevert(abi.encodeWithSelector(SP1Helios.SlotBehindHead.selector, newHead));
         helios.update(proof, publicValues, INITIAL_HEAD);
     }
 
@@ -416,12 +372,7 @@ contract SP1HeliosTest is Test {
 
         vm.warp(helios.slotTimestamp(INITIAL_HEAD) + 1 hours); // Set valid timestamp
 
-        vm.expectRevert(
-            abi.encodeWithSelector(
-                SP1Helios.InvalidHeaderRoot.selector,
-                newHead
-            )
-        );
+        vm.expectRevert(abi.encodeWithSelector(SP1Helios.InvalidHeaderRoot.selector, newHead));
         helios.update(proof, publicValues, INITIAL_HEAD);
     }
 
@@ -456,9 +407,7 @@ contract SP1HeliosTest is Test {
 
         vm.warp(helios.slotTimestamp(INITIAL_HEAD) + 1 hours); // Set valid timestamp
 
-        vm.expectRevert(
-            abi.encodeWithSelector(SP1Helios.InvalidStateRoot.selector, newHead)
-        );
+        vm.expectRevert(abi.encodeWithSelector(SP1Helios.InvalidStateRoot.selector, newHead));
         helios.update(proof, publicValues, INITIAL_HEAD);
     }
 
@@ -495,10 +444,7 @@ contract SP1HeliosTest is Test {
         vm.warp(helios.slotTimestamp(INITIAL_HEAD) + 1 hours); // Set valid timestamp
 
         vm.expectRevert(
-            abi.encodeWithSelector(
-                SP1Helios.SyncCommitteeAlreadySet.selector,
-                nextPeriod
-            )
+            abi.encodeWithSelector(SP1Helios.SyncCommitteeAlreadySet.selector, nextPeriod)
         );
         helios.update(proof, publicValues, INITIAL_HEAD);
     }
@@ -517,11 +463,7 @@ contract SP1HeliosTest is Test {
 
         // Perform first update (to next period)
         performFirstUpdate(
-            nextPeriodHead,
-            nextHeader,
-            nextExecutionStateRoot,
-            nextSyncCommitteeHash,
-            nextPeriod
+            nextPeriodHead, nextHeader, nextExecutionStateRoot, nextSyncCommitteeHash, nextPeriod
         );
 
         // Future update values
@@ -544,10 +486,7 @@ contract SP1HeliosTest is Test {
         );
 
         // Make sure we've gone through multiple periods
-        assertNotEq(
-            initialPeriod,
-            helios.getSyncCommitteePeriod(futurePeriodHead)
-        );
+        assertNotEq(initialPeriod, helios.getSyncCommitteePeriod(futurePeriodHead));
         assertEq(futurePeriod, helios.getSyncCommitteePeriod(futurePeriodHead));
     }
 
@@ -559,9 +498,7 @@ contract SP1HeliosTest is Test {
         bytes32 nextSyncCommitteeHash,
         uint256 nextPeriod
     ) internal {
-        SP1Helios.StorageSlot[] memory emptySlots = new SP1Helios.StorageSlot[](
-            0
-        );
+        SP1Helios.StorageSlot[] memory emptySlots = new SP1Helios.StorageSlot[](0);
 
         SP1Helios.ProofOutputs memory po1 = SP1Helios.ProofOutputs({
             executionStateRoot: nextExecutionStateRoot,
@@ -593,10 +530,7 @@ contract SP1HeliosTest is Test {
         // Verify the updates
         assertEq(helios.head(), nextPeriodHead);
         assertEq(helios.headers(nextPeriodHead), nextHeader);
-        assertEq(
-            helios.executionStateRoots(nextPeriodHead),
-            nextExecutionStateRoot
-        );
+        assertEq(helios.executionStateRoots(nextPeriodHead), nextExecutionStateRoot);
         assertEq(helios.syncCommittees(nextPeriod), nextSyncCommitteeHash);
     }
 
@@ -611,9 +545,7 @@ contract SP1HeliosTest is Test {
         bytes32 nextSyncCommitteeHash,
         uint256 period
     ) internal {
-        SP1Helios.StorageSlot[] memory emptySlots = new SP1Helios.StorageSlot[](
-            0
-        );
+        SP1Helios.StorageSlot[] memory emptySlots = new SP1Helios.StorageSlot[](0);
 
         SP1Helios.ProofOutputs memory po2 = SP1Helios.ProofOutputs({
             executionStateRoot: newExecutionStateRoot,
