@@ -28,9 +28,9 @@ contract SP1HeliosTest is Test {
     function setUp() public {
         mockVerifier = new SP1MockVerifier();
 
-        // Create array of initial updaters
-        address[] memory initialUpdatersArray = new address[](1);
-        initialUpdatersArray[0] = initialUpdater;
+        // Create array of updaters
+        address[] memory updatersArray = new address[](1);
+        updatersArray[0] = initialUpdater;
 
         SP1Helios.InitParams memory params = SP1Helios.InitParams({
             executionStateRoot: INITIAL_EXECUTION_STATE_ROOT,
@@ -45,7 +45,7 @@ contract SP1HeliosTest is Test {
             sourceChainId: SOURCE_CHAIN_ID,
             syncCommitteeHash: INITIAL_SYNC_COMMITTEE_HASH,
             verifier: address(mockVerifier),
-            initialUpdaters: initialUpdatersArray
+            updaters: updatersArray
         });
 
         helios = new SP1Helios(params);
@@ -119,15 +119,12 @@ contract SP1HeliosTest is Test {
         address contractAddress = address(0xabc);
         bytes32 slot = bytes32(uint256(456));
         bytes32 value = bytes32(uint256(789));
-        
+
         // Create storage slots to be set
         SP1Helios.StorageSlot[] memory slots = new SP1Helios.StorageSlot[](1);
-        slots[0] = SP1Helios.StorageSlot({
-            key: slot,
-            value: value,
-            contractAddress: contractAddress
-        });
-        
+        slots[0] =
+            SP1Helios.StorageSlot({key: slot, value: value, contractAddress: contractAddress});
+
         // Create proof outputs
         SP1Helios.ProofOutputs memory po = SP1Helios.ProofOutputs({
             executionStateRoot: bytes32(uint256(11)),
@@ -140,60 +137,83 @@ contract SP1HeliosTest is Test {
             startSyncCommitteeHash: INITIAL_SYNC_COMMITTEE_HASH,
             slots: slots
         });
-        
+
         bytes memory publicValues = abi.encode(po);
         bytes memory proof = new bytes(0);
-        
+
         // Set block timestamp to be valid
         vm.warp(helios.slotTimestamp(INITIAL_HEAD) + 1 hours);
-        
+
         // Update with storage slot
         vm.prank(initialUpdater);
         helios.update(proof, publicValues, INITIAL_HEAD);
-        
+
         // Verify storage slot value
-        assertEq(
-            helios.getStorageSlot(blockNumber, contractAddress, slot),
-            value
-        );
+        assertEq(helios.getStorageSlot(blockNumber, contractAddress, slot), value);
     }
 
-    function testUpdaterManagement() public {
-        address newUpdater = address(0x3);
-        address nonUpdater = address(0x999);
-        
-        // Should revert when called by non-updater
-        vm.prank(nonUpdater);
-        vm.expectRevert();
-        helios.addUpdater(newUpdater);
-        
-        // Should succeed when called by an updater
-        vm.prank(initialUpdater);
-        helios.addUpdater(newUpdater);
-        
-        // Verify the new updater has the role
-        assertTrue(helios.hasRole(helios.UPDATER_ROLE(), newUpdater));
-        
-        // The new updater should also be able to add other updaters
-        address anotherUpdater = address(0x4);
-        vm.prank(newUpdater);
-        helios.addUpdater(anotherUpdater);
-        assertTrue(helios.hasRole(helios.UPDATER_ROLE(), anotherUpdater));
-        
-        // All updaters can remove other updaters
-        vm.prank(newUpdater);
-        helios.removeUpdater(anotherUpdater);
-        assertFalse(helios.hasRole(helios.UPDATER_ROLE(), anotherUpdater));
-        
-        // Initial updater can remove new updater
-        vm.prank(initialUpdater);
-        helios.removeUpdater(newUpdater);
-        assertFalse(helios.hasRole(helios.UPDATER_ROLE(), newUpdater));
-        
-        // Cannot remove last updater
-        vm.prank(initialUpdater);
-        vm.expectRevert(abi.encodeWithSelector(SP1Helios.CannotRemoveLastUpdater.selector));
-        helios.removeUpdater(initialUpdater);
+    function testFixedUpdaters() public {
+        // Create array with multiple updaters
+        address[] memory updatersArray = new address[](3);
+        updatersArray[0] = address(0x100);
+        updatersArray[1] = address(0x200);
+        updatersArray[2] = address(0x300);
+
+        // Create new mock verifier for a clean test
+        SP1MockVerifier newMockVerifier = new SP1MockVerifier();
+
+        // Build new params with multiple updaters
+        SP1Helios.InitParams memory params = SP1Helios.InitParams({
+            executionStateRoot: INITIAL_EXECUTION_STATE_ROOT,
+            genesisTime: GENESIS_TIME,
+            genesisValidatorsRoot: GENESIS_VALIDATORS_ROOT,
+            head: INITIAL_HEAD,
+            header: INITIAL_HEADER,
+            heliosProgramVkey: HELIOS_PROGRAM_VKEY,
+            secondsPerSlot: SECONDS_PER_SLOT,
+            slotsPerEpoch: SLOTS_PER_EPOCH,
+            slotsPerPeriod: SLOTS_PER_PERIOD,
+            sourceChainId: SOURCE_CHAIN_ID,
+            syncCommitteeHash: INITIAL_SYNC_COMMITTEE_HASH,
+            verifier: address(newMockVerifier),
+            updaters: updatersArray
+        });
+
+        // Create new contract instance
+        SP1Helios fixedUpdaterHelios = new SP1Helios(params);
+
+        // Verify all updaters have the UPDATER_ROLE
+        for (uint256 i = 0; i < updatersArray.length; i++) {
+            assertTrue(
+                fixedUpdaterHelios.hasRole(fixedUpdaterHelios.UPDATER_ROLE(), updatersArray[i])
+            );
+        }
+
+        // Verify updaters can update (testing just the first one)
+        SP1Helios.StorageSlot[] memory slots = new SP1Helios.StorageSlot[](0); // Empty slots array
+        SP1Helios.ProofOutputs memory po = SP1Helios.ProofOutputs({
+            executionStateRoot: bytes32(uint256(11)),
+            newHeader: bytes32(uint256(10)),
+            nextSyncCommitteeHash: bytes32(0),
+            newHead: INITIAL_HEAD + 1,
+            prevHeader: INITIAL_HEADER,
+            prevHead: INITIAL_HEAD,
+            syncCommitteeHash: INITIAL_SYNC_COMMITTEE_HASH,
+            startSyncCommitteeHash: INITIAL_SYNC_COMMITTEE_HASH,
+            slots: slots
+        });
+        bytes memory publicValues = abi.encode(po);
+        bytes memory proof = new bytes(0);
+
+        // Set block timestamp to be valid
+        vm.warp(fixedUpdaterHelios.slotTimestamp(INITIAL_HEAD) + 1 hours);
+
+        // Update should succeed when called by an updater
+        vm.prank(updatersArray[0]);
+        fixedUpdaterHelios.update(proof, publicValues, INITIAL_HEAD);
+
+        // Verify update was successful
+        assertEq(fixedUpdaterHelios.head(), INITIAL_HEAD + 1);
     }
 
     function testUpdate() public {
@@ -269,11 +289,7 @@ contract SP1HeliosTest is Test {
         // Verify all storage slots were set correctly
         for (uint256 i = 0; i < slots.length; i++) {
             assertEq(
-                helios.getStorageSlot(
-                    newHead, 
-                    slots[i].contractAddress, 
-                    slots[i].key
-                ),
+                helios.getStorageSlot(newHead, slots[i].contractAddress, slots[i].key),
                 slots[i].value,
                 string(abi.encodePacked("Storage slot ", i, " was not set correctly"))
             );
@@ -288,7 +304,7 @@ contract SP1HeliosTest is Test {
     function testUpdateWithNonexistentFromHead() public {
         uint256 nonExistentHead = 999999;
 
-        SP1Helios.StorageSlot[] memory slots = new SP1Helios.StorageSlot[](0);
+        SP1Helios.StorageSlot[] memory slots = new SP1Helios.StorageSlot[](0); // No storage slots for this test
 
         SP1Helios.ProofOutputs memory po = SP1Helios.ProofOutputs({
             executionStateRoot: bytes32(0),
@@ -306,7 +322,9 @@ contract SP1HeliosTest is Test {
         bytes memory proof = new bytes(0);
 
         vm.prank(initialUpdater);
-        vm.expectRevert(abi.encodeWithSelector(SP1Helios.PreviousHeadNotSet.selector, nonExistentHead));
+        vm.expectRevert(
+            abi.encodeWithSelector(SP1Helios.PreviousHeadNotSet.selector, nonExistentHead)
+        );
         helios.update(proof, publicValues, nonExistentHead);
     }
 
@@ -314,7 +332,7 @@ contract SP1HeliosTest is Test {
         // Set block timestamp to be more than MAX_SLOT_AGE after the initial head timestamp
         vm.warp(helios.slotTimestamp(INITIAL_HEAD) + helios.MAX_SLOT_AGE() + 1);
 
-        SP1Helios.StorageSlot[] memory slots = new SP1Helios.StorageSlot[](0);
+        SP1Helios.StorageSlot[] memory slots = new SP1Helios.StorageSlot[](0); // No storage slots for this test
 
         SP1Helios.ProofOutputs memory po = SP1Helios.ProofOutputs({
             executionStateRoot: bytes32(0),
@@ -339,7 +357,7 @@ contract SP1HeliosTest is Test {
     function testUpdateWithNewHeadBehindFromHead() public {
         uint256 newHead = INITIAL_HEAD - 1; // Less than INITIAL_HEAD
 
-        SP1Helios.StorageSlot[] memory slots = new SP1Helios.StorageSlot[](0);
+        SP1Helios.StorageSlot[] memory slots = new SP1Helios.StorageSlot[](0); // No storage slots for this test
 
         SP1Helios.ProofOutputs memory po = SP1Helios.ProofOutputs({
             executionStateRoot: bytes32(0),
@@ -367,7 +385,7 @@ contract SP1HeliosTest is Test {
     function testUpdateWithIncorrectSyncCommitteeHash() public {
         bytes32 wrongSyncCommitteeHash = bytes32(uint256(999));
 
-        SP1Helios.StorageSlot[] memory slots = new SP1Helios.StorageSlot[](0);
+        SP1Helios.StorageSlot[] memory slots = new SP1Helios.StorageSlot[](0); // No storage slots for this test
 
         SP1Helios.ProofOutputs memory po = SP1Helios.ProofOutputs({
             executionStateRoot: bytes32(0),
@@ -388,36 +406,25 @@ contract SP1HeliosTest is Test {
         vm.warp(helios.slotTimestamp(INITIAL_HEAD) + 1 hours);
 
         vm.prank(initialUpdater);
-        vm.expectRevert(abi.encodeWithSelector(
-            SP1Helios.SyncCommitteeStartMismatch.selector, 
-            wrongSyncCommitteeHash, 
-            INITIAL_SYNC_COMMITTEE_HASH
-        ));
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                SP1Helios.SyncCommitteeStartMismatch.selector,
+                wrongSyncCommitteeHash,
+                INITIAL_SYNC_COMMITTEE_HASH
+            )
+        );
         helios.update(proof, publicValues, INITIAL_HEAD);
     }
 
     function testRoleBasedAccessControl() public {
-        address newUpdater = address(0x3);
         address nonUpdater = address(0x4);
-        
-        // Non-updater cannot add updaters
-        vm.prank(nonUpdater);
-        vm.expectRevert();
-        helios.addUpdater(newUpdater);
-        
+
         // Initial updater has the UPDATER_ROLE
         assertTrue(helios.hasRole(helios.UPDATER_ROLE(), initialUpdater));
-        
-        // Initial updater can add other updaters
-        vm.prank(initialUpdater);
-        helios.addUpdater(newUpdater);
-        
-        // Check that the new updater has the role
-        assertTrue(helios.hasRole(helios.UPDATER_ROLE(), newUpdater));
-        
+
         // Non-updater cannot call update
         vm.prank(nonUpdater);
-        SP1Helios.StorageSlot[] memory slots = new SP1Helios.StorageSlot[](0);
+        SP1Helios.StorageSlot[] memory slots = new SP1Helios.StorageSlot[](0); // No storage slots for this test
         SP1Helios.ProofOutputs memory po = SP1Helios.ProofOutputs({
             executionStateRoot: bytes32(uint256(11)),
             newHeader: bytes32(uint256(10)),
@@ -431,31 +438,18 @@ contract SP1HeliosTest is Test {
         });
         bytes memory publicValues = abi.encode(po);
         bytes memory proof = new bytes(0);
-        
+
         vm.expectRevert();
         helios.update(proof, publicValues, INITIAL_HEAD);
-        
-        // New updater can also add updaters
-        vm.prank(newUpdater);
-        address anotherUpdater = address(0x5);
-        helios.addUpdater(anotherUpdater);
-        assertTrue(helios.hasRole(helios.UPDATER_ROLE(), anotherUpdater));
-        
-        // Updaters can remove other updaters
-        vm.prank(initialUpdater);
-        helios.removeUpdater(newUpdater);
-        
-        // Check that the updater no longer has the role
-        assertFalse(helios.hasRole(helios.UPDATER_ROLE(), newUpdater));
     }
-    
-    function testNoInitialUpdaters() public {
-        // Create empty array for initial updaters
-        address[] memory initialUpdatersArray = new address[](0);
-        
+
+    function testNoUpdaters() public {
+        // Create empty array for updaters
+        address[] memory updatersArray = new address[](0);
+
         // Create new mock verifier for a clean test
         SP1MockVerifier newMockVerifier = new SP1MockVerifier();
-        
+
         // Build new params with no updaters
         SP1Helios.InitParams memory params = SP1Helios.InitParams({
             executionStateRoot: INITIAL_EXECUTION_STATE_ROOT,
@@ -470,25 +464,24 @@ contract SP1HeliosTest is Test {
             sourceChainId: SOURCE_CHAIN_ID,
             syncCommitteeHash: INITIAL_SYNC_COMMITTEE_HASH,
             verifier: address(newMockVerifier),
-            initialUpdaters: initialUpdatersArray
+            updaters: updatersArray
         });
-        
-        // Expect revert when no initial updaters are provided
-        vm.expectRevert(abi.encodeWithSelector(SP1Helios.NoInitialUpdatersProvided.selector));
+
+        // Expect revert when no updaters are provided
+        vm.expectRevert(abi.encodeWithSelector(SP1Helios.NoUpdatersProvided.selector));
         new SP1Helios(params);
     }
 
-    function testMultipleInitialUpdaters() public {
-        // Create array with multiple initial updaters
-        address[] memory initialUpdatersArray = new address[](3);
-        initialUpdatersArray[0] = address(0x100);
-        initialUpdatersArray[1] = address(0x200);
-        initialUpdatersArray[2] = address(0x300);
-        
+    function testAdminAccess() public {
+        // Create array with multiple updaters
+        address[] memory updatersArray = new address[](2);
+        updatersArray[0] = address(0x100);
+        updatersArray[1] = address(0x200);
+
         // Create new mock verifier for a clean test
         SP1MockVerifier newMockVerifier = new SP1MockVerifier();
-        
-        // Build new params with multiple updaters
+
+        // Build new params
         SP1Helios.InitParams memory params = SP1Helios.InitParams({
             executionStateRoot: INITIAL_EXECUTION_STATE_ROOT,
             genesisTime: GENESIS_TIME,
@@ -502,35 +495,20 @@ contract SP1HeliosTest is Test {
             sourceChainId: SOURCE_CHAIN_ID,
             syncCommitteeHash: INITIAL_SYNC_COMMITTEE_HASH,
             verifier: address(newMockVerifier),
-            initialUpdaters: initialUpdatersArray
+            updaters: updatersArray
         });
-        
+
         // Create new contract instance
-        SP1Helios multiHelios = new SP1Helios(params);
-        
-        // Verify all initial updaters have the UPDATER_ROLE
-        for (uint256 i = 0; i < initialUpdatersArray.length; i++) {
-            assertTrue(multiHelios.hasRole(multiHelios.UPDATER_ROLE(), initialUpdatersArray[i]));
-        }
-        
-        // Test that each updater can add new updaters
-        address newUpdater = address(0x999);
-        vm.prank(initialUpdatersArray[1]);
-        multiHelios.addUpdater(newUpdater);
-        assertTrue(multiHelios.hasRole(multiHelios.UPDATER_ROLE(), newUpdater));
-        
-        // Test that each updater can remove other updaters
-        vm.prank(initialUpdatersArray[0]);
-        multiHelios.removeUpdater(initialUpdatersArray[2]);
-        assertFalse(multiHelios.hasRole(multiHelios.UPDATER_ROLE(), initialUpdatersArray[2]));
-        
-        // Can't remove last updater (which would be ourselves in this case)
-        vm.startPrank(initialUpdatersArray[0]);
-        multiHelios.removeUpdater(initialUpdatersArray[1]);
-        multiHelios.removeUpdater(newUpdater);
-        vm.expectRevert(abi.encodeWithSelector(SP1Helios.CannotRemoveLastUpdater.selector));
-        multiHelios.removeUpdater(initialUpdatersArray[0]);
-        vm.stopPrank();
+        SP1Helios immutableHelios = new SP1Helios(params);
+
+        // Verify there's no admin for the UPDATER_ROLE
+        bytes32 adminRole = immutableHelios.getRoleAdmin(immutableHelios.UPDATER_ROLE());
+        assertEq(adminRole, bytes32(0)); // No admin role
+
+        // Verify even the updater can't add new updaters
+        vm.prank(updatersArray[0]);
+        // No method to call - these functions have been removed
+        // The test just verifies that the role is correctly fixed at initialization
     }
 
     function testUpdateThroughMultipleSyncCommittees() public {
@@ -538,29 +516,25 @@ contract SP1HeliosTest is Test {
         uint256 initialPeriod = helios.getSyncCommitteePeriod(INITIAL_HEAD);
         uint256 nextPeriod = initialPeriod + 1;
         uint256 futurePeriod = initialPeriod + 2;
-        
+
         // First update values
         uint256 nextPeriodHead = INITIAL_HEAD + SLOTS_PER_PERIOD / 2; // Middle of next period
         bytes32 nextHeader = bytes32(uint256(10));
         bytes32 nextExecutionStateRoot = bytes32(uint256(11));
         bytes32 nextSyncCommitteeHash = bytes32(uint256(12));
-        
+
         // Perform first update (to next period)
         performFirstUpdate(
-            nextPeriodHead,
-            nextHeader,
-            nextExecutionStateRoot,
-            nextSyncCommitteeHash,
-            nextPeriod
+            nextPeriodHead, nextHeader, nextExecutionStateRoot, nextSyncCommitteeHash, nextPeriod
         );
-        
+
         // Future update values
         uint256 futurePeriodHead = INITIAL_HEAD + (SLOTS_PER_PERIOD * 2) - 10; // Close to end of second period
         bytes32 futureHeader = bytes32(uint256(20));
         bytes32 futureExecutionStateRoot = bytes32(uint256(21));
         bytes32 futureSyncCommitteeHash = bytes32(uint256(22));
         bytes32 futureNextSyncCommitteeHash = bytes32(uint256(13));
-        
+
         // Perform second update (to future period)
         performSecondUpdate(
             nextPeriodHead,
@@ -573,12 +547,12 @@ contract SP1HeliosTest is Test {
             futureNextSyncCommitteeHash,
             futurePeriod
         );
-        
+
         // Make sure we've gone through multiple periods
         assertNotEq(initialPeriod, helios.getSyncCommitteePeriod(futurePeriodHead));
         assertEq(futurePeriod, helios.getSyncCommitteePeriod(futurePeriodHead));
     }
-    
+
     // Helper function for the first update in testUpdateThroughMultipleSyncCommittees
     function performFirstUpdate(
         uint256 nextPeriodHead,
@@ -587,8 +561,8 @@ contract SP1HeliosTest is Test {
         bytes32 nextSyncCommitteeHash,
         uint256 nextPeriod
     ) internal {
-        SP1Helios.StorageSlot[] memory emptySlots = new SP1Helios.StorageSlot[](0);
-        
+        SP1Helios.StorageSlot[] memory emptySlots = new SP1Helios.StorageSlot[](0); // No storage slots for this test
+
         SP1Helios.ProofOutputs memory po1 = SP1Helios.ProofOutputs({
             executionStateRoot: nextExecutionStateRoot,
             newHeader: nextHeader,
@@ -600,35 +574,35 @@ contract SP1HeliosTest is Test {
             startSyncCommitteeHash: INITIAL_SYNC_COMMITTEE_HASH,
             slots: emptySlots
         });
-        
+
         bytes memory publicValues1 = abi.encode(po1);
         bytes memory proof = new bytes(0);
-        
+
         // Set block timestamp to be valid for the update
         vm.warp(helios.slotTimestamp(INITIAL_HEAD) + 1 hours);
-        
+
         // Expect event emissions for head update and sync committee update
         vm.expectEmit(true, true, false, true);
         emit SP1Helios.HeadUpdate(nextPeriodHead, nextHeader);
-        
+
         vm.expectEmit(true, true, false, true);
         emit SP1Helios.SyncCommitteeUpdate(nextPeriod, nextSyncCommitteeHash);
-        
+
         vm.prank(initialUpdater);
         helios.update(proof, publicValues1, INITIAL_HEAD);
-        
+
         // Verify the updates
         assertEq(helios.head(), nextPeriodHead);
         assertEq(helios.headers(nextPeriodHead), nextHeader);
         assertEq(helios.executionStateRoots(nextPeriodHead), nextExecutionStateRoot);
         assertEq(helios.syncCommittees(nextPeriod), nextSyncCommitteeHash);
     }
-    
+
     // Helper function for the second update in testUpdateThroughMultipleSyncCommittees
     function performSecondUpdate(
         uint256 prevHead,
         bytes32 prevHeader,
-        bytes32 /* prevSyncCommitteeHash */,
+        bytes32, /* prevSyncCommitteeHash */
         uint256 newHead,
         bytes32 newHeader,
         bytes32 newExecutionStateRoot,
@@ -636,8 +610,8 @@ contract SP1HeliosTest is Test {
         bytes32 nextSyncCommitteeHash,
         uint256 period
     ) internal {
-        SP1Helios.StorageSlot[] memory emptySlots = new SP1Helios.StorageSlot[](0);
-        
+        SP1Helios.StorageSlot[] memory emptySlots = new SP1Helios.StorageSlot[](0); // No storage slots for this test
+
         SP1Helios.ProofOutputs memory po2 = SP1Helios.ProofOutputs({
             executionStateRoot: newExecutionStateRoot,
             newHeader: newHeader,
@@ -649,26 +623,26 @@ contract SP1HeliosTest is Test {
             startSyncCommitteeHash: INITIAL_SYNC_COMMITTEE_HASH, // This must match the sync committee from the initial setup
             slots: emptySlots
         });
-        
+
         bytes memory publicValues2 = abi.encode(po2);
         bytes memory proof = new bytes(0);
-        
+
         // Set block timestamp to be valid for the next update
         vm.warp(helios.slotTimestamp(prevHead) + 1 hours);
-        
+
         // Expect event emissions for the second update
         vm.expectEmit(true, true, false, true);
         emit SP1Helios.HeadUpdate(newHead, newHeader);
-        
+
         vm.expectEmit(true, true, false, true);
         emit SP1Helios.SyncCommitteeUpdate(period, newSyncCommitteeHash);
-        
+
         vm.expectEmit(true, true, false, true);
         emit SP1Helios.SyncCommitteeUpdate(period + 1, nextSyncCommitteeHash);
-        
+
         vm.prank(initialUpdater);
         helios.update(proof, publicValues2, prevHead);
-        
+
         // Verify the second update
         assertEq(helios.head(), newHead);
         assertEq(helios.headers(newHead), newHeader);
