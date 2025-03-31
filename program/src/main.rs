@@ -122,11 +122,7 @@ fn verify_storage_slot_proofs(
         execution_state_root,
         address_nibbles,
         Some(rlp_encoded_trie_account.clone()),
-        &contract_storage
-            .mpt_proof
-            .iter()
-            .map(|b| Bytes::copy_from_slice(b.as_ref()))
-            .collect::<Vec<Bytes>>(),
+        &contract_storage.mpt_proof,
     ) {
         panic!(
             "Could not verify the contract's `TrieAccount` in the global MPT for address {}: {}",
@@ -152,21 +148,16 @@ fn verify_storage_slot_proofs(
             contract_storage.expected_value.storage_root,
             key_nibbles,
             Some(rlp_encoded_value),
-            &slot
-                .mpt_proof
-                .iter()
-                .map(|b| Bytes::copy_from_slice(b.as_ref()))
-                .collect::<Vec<Bytes>>(),
+            &slot.mpt_proof,
         ) {
             panic!("Storage proof invalid for slot {}: {}", hex::encode(key), e);
         }
 
         verified_slots.push(VerifiedStorageSlot {
             key,
-            value,
+            value: FixedBytes(value.to_be_bytes()),
             contractAddress: contract_storage.address,
         });
-        println!("Verified storage slot: {}", hex::encode(key));
     }
 
     verified_slots
