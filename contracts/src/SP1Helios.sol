@@ -87,10 +87,7 @@ contract SP1Helios {
     event HeadUpdate(uint256 indexed slot, bytes32 indexed root);
     event SyncCommitteeUpdate(uint256 indexed period, bytes32 indexed root);
     event StorageSlotVerified(
-        uint256 indexed head,
-        bytes32 indexed key,
-        bytes32 value,
-        address contractAddress
+        uint256 indexed head, bytes32 indexed key, bytes32 value, address contractAddress
     );
 
     error SlotBehindHead(uint256 slot);
@@ -108,8 +105,7 @@ contract SP1Helios {
         SLOTS_PER_PERIOD = params.slotsPerPeriod;
         SLOTS_PER_EPOCH = params.slotsPerEpoch;
         SOURCE_CHAIN_ID = params.sourceChainId;
-        syncCommittees[getSyncCommitteePeriod(params.head)] = params
-            .syncCommitteeHash;
+        syncCommittees[getSyncCommitteePeriod(params.head)] = params.syncCommitteeHash;
         heliosProgramVkey = params.heliosProgramVkey;
         headers[params.head] = params.header;
         executionStateRoots[params.head] = params.executionStateRoot;
@@ -122,11 +118,7 @@ contract SP1Helios {
     /// @param proof The proof bytes for the SP1 proof.
     /// @param publicValues The public commitments from the SP1 proof.
     /// @param fromHead The head slot to prove against.
-    function update(
-        bytes calldata proof,
-        bytes calldata publicValues,
-        uint256 fromHead
-    ) external {
+    function update(bytes calldata proof, bytes calldata publicValues, uint256 fromHead) external {
         if (headers[fromHead] == bytes32(0)) {
             revert PreviousHeadNotSet(fromHead);
         }
@@ -148,24 +140,14 @@ contract SP1Helios {
         // The "start" sync committee hash is the hash of the sync committee that should sign the next update.
         bytes32 currentSyncCommitteeHash = syncCommittees[currentPeriod];
         if (currentSyncCommitteeHash != po.startSyncCommitteeHash) {
-            revert SyncCommitteeStartMismatch(
-                po.startSyncCommitteeHash,
-                currentSyncCommitteeHash
-            );
+            revert SyncCommitteeStartMismatch(po.startSyncCommitteeHash, currentSyncCommitteeHash);
         }
 
         // Verify the proof with the associated public values. This will revert if proof invalid.
-        ISP1Verifier(verifier).verifyProof(
-            heliosProgramVkey,
-            publicValues,
-            proof
-        );
+        ISP1Verifier(verifier).verifyProof(heliosProgramVkey, publicValues, proof);
 
         // Check that the new header hasnt been set already.
-        if (
-            headers[po.newHead] != bytes32(0) &&
-            headers[po.newHead] != po.newHeader
-        ) {
+        if (headers[po.newHead] != bytes32(0) && headers[po.newHead] != po.newHeader) {
             revert InvalidHeaderRoot(po.newHead);
         }
         // Set new header.
@@ -176,8 +158,8 @@ contract SP1Helios {
 
         // Check that the new state root hasnt been set already.
         if (
-            executionStateRoots[po.newHead] != bytes32(0) &&
-            executionStateRoots[po.newHead] != po.executionStateRoot
+            executionStateRoots[po.newHead] != bytes32(0)
+                && executionStateRoots[po.newHead] != po.executionStateRoot
         ) {
             revert InvalidStateRoot(po.newHead);
         }
@@ -189,18 +171,9 @@ contract SP1Helios {
         // Store all provided storage slot values
         for (uint256 i = 0; i < po.slots.length; i++) {
             StorageSlot memory slot = po.slots[i];
-            bytes32 storageKey = computeStorageKey(
-                po.newHead,
-                slot.contractAddress,
-                slot.key
-            );
+            bytes32 storageKey = computeStorageKey(po.newHead, slot.contractAddress, slot.key);
             storageValues[storageKey] = slot.value;
-            emit StorageSlotVerified(
-                po.newHead,
-                slot.key,
-                slot.value,
-                slot.contractAddress
-            );
+            emit StorageSlotVerified(po.newHead, slot.key, slot.value, slot.contractAddress);
         }
 
         uint256 period = getSyncCommitteePeriod(po.newHead);
@@ -230,9 +203,7 @@ contract SP1Helios {
     }
 
     /// @notice Gets the sync committee period from a slot.
-    function getSyncCommitteePeriod(
-        uint256 slot
-    ) public view returns (uint256) {
+    function getSyncCommitteePeriod(uint256 slot) public view returns (uint256) {
         return slot / SLOTS_PER_PERIOD;
     }
 
@@ -257,23 +228,20 @@ contract SP1Helios {
     }
 
     /// @notice Computes the key for a contract's storage slot
-    function computeStorageKey(
-        uint256 blockNumber,
-        address contractAddress,
-        bytes32 slot
-    ) public pure returns (bytes32) {
+    function computeStorageKey(uint256 blockNumber, address contractAddress, bytes32 slot)
+        public
+        pure
+        returns (bytes32)
+    {
         return keccak256(abi.encodePacked(blockNumber, contractAddress, slot));
     }
 
     /// @notice Gets the value of a storage slot at a specific block
-    function getStorageSlot(
-        uint256 blockNumber,
-        address contractAddress,
-        bytes32 slot
-    ) external view returns (bytes32) {
-        return
-            storageValues[
-                computeStorageKey(blockNumber, contractAddress, slot)
-            ];
+    function getStorageSlot(uint256 blockNumber, address contractAddress, bytes32 slot)
+        external
+        view
+        returns (bytes32)
+    {
+        return storageValues[computeStorageKey(blockNumber, contractAddress, slot)];
     }
 }
