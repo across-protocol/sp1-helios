@@ -11,7 +11,7 @@ use helios_ethereum::rpc::http_rpc::HttpRpc;
 use helios_ethereum::rpc::ConsensusRpc;
 use log::{error, info};
 use reqwest::Url;
-use sp1_helios_primitives::types::ProofInputs;
+use sp1_helios_primitives::types::{ContractStorage, ProofInputs};
 use sp1_helios_script::*;
 use sp1_sdk::{EnvProver, ProverClient, SP1ProofWithPublicValues, SP1ProvingKey, SP1Stdin};
 use std::env;
@@ -181,7 +181,12 @@ impl SP1HeliosOperator {
             store: client.store.clone(),
             genesis_root: client.config.chain.genesis_root,
             forks: client.config.forks.clone(),
-            storage_slots: Vec::new(),
+            contract_storage_slots: ContractStorage {
+                address: todo!(),
+                expected_value: todo!(),
+                mpt_proof: todo!(),
+                storage_slots: todo!(),
+            },
         };
         let encoded_proof_inputs = serde_cbor::to_vec(&inputs)?;
         stdin.write_slice(&encoded_proof_inputs);
