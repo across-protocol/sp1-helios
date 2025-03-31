@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: UNLICENSED
+// SPDX-License-Identifier: MIT
 pragma solidity ^0.8.22;
 
 import {ISP1Verifier} from "@sp1-contracts/ISP1Verifier.sol";
@@ -138,7 +138,7 @@ contract SP1Helios {
 
         // Parse the outputs from the committed public values associated with the proof.
         ProofOutputs memory po = abi.decode(publicValues, (ProofOutputs));
-        if (po.newHead < fromHead) {
+        if (po.newHead <= fromHead) {
             revert SlotBehindHead(po.newHead);
         }
 
