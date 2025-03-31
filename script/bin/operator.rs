@@ -3,7 +3,7 @@ use alloy::{
     network::EthereumWallet, primitives::Address, providers::ProviderBuilder,
     signers::local::PrivateKeySigner, sol,
 };
-use alloy_primitives::{B256, U256};
+use alloy_primitives::{address, b256, bytes, keccak256, StorageKey, B256, U256};
 use anyhow::Result;
 use helios_consensus_core::consensus_spec::MainnetConsensusSpec;
 use helios_ethereum::consensus::Inner;
@@ -11,7 +11,7 @@ use helios_ethereum::rpc::http_rpc::HttpRpc;
 use helios_ethereum::rpc::ConsensusRpc;
 use log::{error, info};
 use reqwest::Url;
-use sp1_helios_primitives::types::{ContractStorage, ProofInputs};
+use sp1_helios_primitives::types::{ContractStorage, ProofInputs, StorageSlot};
 use sp1_helios_script::*;
 use sp1_sdk::{EnvProver, ProverClient, SP1ProofWithPublicValues, SP1ProvingKey, SP1Stdin};
 use std::env;
@@ -25,6 +25,7 @@ struct SP1HeliosOperator {
     pk: SP1ProvingKey,
     wallet: EthereumWallet,
     rpc_url: Url,
+    source_execution_rpc_url: Url,
     contract_address: Address,
     relayer_address: Address,
 }
@@ -88,6 +89,12 @@ impl SP1HeliosOperator {
             .parse()
             .unwrap();
 
+        // required for storage slot merkle proving
+        let source_execution_rpc_url = env::var("SOURCE_EXECUTION_RPC_URL")
+            .expect("SOURCE_EXECUTION_RPC_URL not set")
+            .parse()
+            .unwrap();
+
         let private_key = env::var("PRIVATE_KEY").expect("PRIVATE_KEY not set");
         let contract_address: Address = env::var("CONTRACT_ADDRESS")
             .expect("CONTRACT_ADDRESS not set")
@@ -102,6 +109,7 @@ impl SP1HeliosOperator {
             pk,
             wallet,
             rpc_url,
+            source_execution_rpc_url,
             contract_address,
             relayer_address,
         }
@@ -114,6 +122,8 @@ impl SP1HeliosOperator {
     ) -> Result<Option<SP1ProofWithPublicValues>> {
         // Fetch required values.
         let provider = ProviderBuilder::new().on_http(self.rpc_url.clone());
+        let src_exec_provider =
+            ProviderBuilder::new().on_http(self.source_execution_rpc_url.clone());
         let contract = SP1Helios::new(self.contract_address, provider);
         let head: u64 = contract
             .head()
@@ -174,6 +184,37 @@ impl SP1HeliosOperator {
 
         // Create program inputs
         let expected_current_slot = client.expected_current_slot();
+        let hub_pool_store_addr = address!("0xdD6Fa55b12aA2a937BA053d610D76f20cC235c09");
+        let storage_key = b256!("ad3228b676f7d3cd4284a5443f17f1962b36e491b30a40b2405849e597ba5fb5");
+        let storage_keys: Vec<StorageKey> = vec![storage_key];
+
+        println!("latest block: {:?}", latest_block);
+
+        let proof = src_exec_provider
+            .get_proof(hub_pool_store_addr, storage_keys)
+            .block_id(latest_block.into())
+            .await?;
+
+        let expected_value = U256::from_str_radix(
+            "e955e8270bae4ffaee6178c273b4041cb56abb9b5f4dc6a0aff5bfd232d2a6ea",
+            16,
+        )
+        .expect("Invalid hex string for U256");
+
+        println!("expected value: {:?}", expected_value);
+        println!("value from get_proof: {:?}", proof.storage_proof[0].value);
+
+        assert!(
+            expected_value.eq(&proof.storage_proof[0].value),
+            "expected_value != value from get_proof"
+        );
+
+        let storage_slot = StorageSlot {
+            key: storage_key,
+            expected_value,
+            mpt_proof: proof.storage_proof[0].proof.clone(),
+        };
+
         let inputs = ProofInputs {
             sync_committee_updates,
             finality_update,
@@ -182,10 +223,15 @@ impl SP1HeliosOperator {
             genesis_root: client.config.chain.genesis_root,
             forks: client.config.forks.clone(),
             contract_storage_slots: ContractStorage {
-                address: todo!(),
-                expected_value: todo!(),
-                mpt_proof: todo!(),
-                storage_slots: todo!(),
+                address: proof.address,
+                expected_value: alloy_trie::TrieAccount {
+                    nonce: proof.nonce,
+                    balance: proof.balance,
+                    storage_root: proof.storage_hash,
+                    code_hash: proof.code_hash,
+                },
+                mpt_proof: proof.account_proof,
+                storage_slots: vec![storage_slot],
             },
         };
         let encoded_proof_inputs = serde_cbor::to_vec(&inputs)?;
