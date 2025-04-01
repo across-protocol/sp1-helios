@@ -3,7 +3,7 @@ use alloy::{
     network::EthereumWallet, primitives::Address, providers::ProviderBuilder,
     signers::local::PrivateKeySigner, sol,
 };
-use alloy_primitives::{address, b256, bytes, keccak256, StorageKey, B256, U256};
+use alloy_primitives::{address, b256, B256, U256};
 use anyhow::Result;
 use helios_consensus_core::consensus_spec::MainnetConsensusSpec;
 use helios_ethereum::consensus::Inner;
@@ -125,7 +125,9 @@ impl SP1HeliosOperator {
         let src_exec_provider =
             ProviderBuilder::new().on_http(self.source_execution_rpc_url.clone());
         let contract = SP1Helios::new(self.contract_address, provider);
-        let head: u64 = contract
+
+        // contract head refers to a slot number
+        let current_contract_head: u64 = contract
             .head()
             .call()
             .await
@@ -134,7 +136,7 @@ impl SP1HeliosOperator {
             .try_into()
             .unwrap();
         let period: u64 = contract
-            .getSyncCommitteePeriod(U256::from(head))
+            .getSyncCommitteePeriod(U256::from(current_contract_head))
             .call()
             .await
             .unwrap()
@@ -155,8 +157,16 @@ impl SP1HeliosOperator {
         let finality_update = client.rpc.get_finality_update().await.unwrap();
 
         // Check if contract is up to date
-        let latest_block = finality_update.finalized_header().beacon().slot;
-        if latest_block <= head {
+        let latest_finalized_header = finality_update.finalized_header();
+        // todo: can't execution_payload_header be empty when there's no block proposed for a slot?
+        // todo: maybe that's when it returns an error.
+        let latest_finalized_execution_header = latest_finalized_header
+            .execution()
+            // todo: is error empty from .execution() call?
+            .map_err(|_e| anyhow::anyhow!("Failed to get execution payload header"))?;
+
+        let latest_slot = latest_finalized_header.beacon().slot;
+        if latest_slot <= current_contract_head {
             info!("Contract is up to date. Nothing to update.");
             return Ok(None);
         }
@@ -184,25 +194,28 @@ impl SP1HeliosOperator {
 
         // Create program inputs
         let expected_current_slot = client.expected_current_slot();
+
+        // constants for POC testing
         let hub_pool_store_addr = address!("0xdD6Fa55b12aA2a937BA053d610D76f20cC235c09");
         let storage_key = b256!("ad3228b676f7d3cd4284a5443f17f1962b36e491b30a40b2405849e597ba5fb5");
-        let storage_keys: Vec<StorageKey> = vec![storage_key];
 
-        println!("latest block: {:?}", latest_block);
+        let latest_execution_block_number = *latest_finalized_execution_header.block_number();
+        println!(
+            "latest execution block number: {:?}",
+            latest_execution_block_number
+        );
 
         let proof = src_exec_provider
-            .get_proof(hub_pool_store_addr, storage_keys)
-            .block_id(latest_block.into())
+            .get_proof(hub_pool_store_addr, vec![storage_key])
+            .block_id(latest_execution_block_number.into())
             .await?;
 
+        // encode bytes32 from contract into U256 -- the format we require here
         let expected_value = U256::from_str_radix(
             "e955e8270bae4ffaee6178c273b4041cb56abb9b5f4dc6a0aff5bfd232d2a6ea",
             16,
         )
         .expect("Invalid hex string for U256");
-
-        println!("expected value: {:?}", expected_value);
-        println!("value from get_proof: {:?}", proof.storage_proof[0].value);
 
         assert!(
             expected_value.eq(&proof.storage_proof[0].value),
@@ -240,7 +253,7 @@ impl SP1HeliosOperator {
         // Generate proof.
         let proof = self.client.prove(&self.pk, &stdin).groth16().run()?;
 
-        info!("Attempting to update to new head block: {:?}", latest_block);
+        info!("Attempting to update to new head block: {:?}", latest_slot);
         Ok(Some(proof))
     }
 
