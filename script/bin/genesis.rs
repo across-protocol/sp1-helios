@@ -29,7 +29,6 @@ pub struct GenesisConfig {
     pub execution_state_root: String,
     pub genesis_time: u64,
     pub genesis_validators_root: String,
-    pub guardian: String,
     pub head: u64,
     pub header: String,
     pub helios_program_vkey: String,
@@ -39,6 +38,7 @@ pub struct GenesisConfig {
     pub source_chain_id: u64,
     pub sync_committee_hash: String,
     pub verifier: String,
+    pub updaters: Vec<String>,
 }
 
 #[tokio::main]
@@ -137,14 +137,28 @@ pub async fn main() -> Result<()> {
     let signer: PrivateKeySigner = private_key.parse().expect("Failed to parse private key");
     let deployer_address = signer.address();
 
-    // Attempt using the GUARDIAN_ADDRESS, otherwise default to the address derived from the private key.
-    // If the GUARDIAN_ADDRESS is not set, or is empty, the deployer address is used as the guardian address.
-    let guardian = match env::var("GUARDIAN_ADDRESS") {
-        Ok(guardian_addr) if !guardian_addr.is_empty() => guardian_addr,
-        _ => format!("0x{:x}", deployer_address),
+    // Parse comma-separated UPDATERS environment variable into a vector of addresses
+    // If not set or empty, default to using the deployer address as the only updater
+    let updaters = match env::var("UPDATERS") {
+        Ok(updaters_str) if !updaters_str.is_empty() => {
+            // Split by comma and trim whitespace
+            updaters_str
+                .split(',')
+                .map(|addr| {
+                    let trimmed = addr.trim();
+                    // Format addresses consistently - ensure they have 0x prefix
+                    if trimmed.starts_with("0x") {
+                        trimmed.to_string()
+                    } else {
+                        format!("0x{}", trimmed)
+                    }
+                })
+                .collect()
+        }
+        _ => vec![format!("0x{:x}", deployer_address)],
     };
 
-    genesis_config.guardian = guardian;
+    genesis_config.updaters = updaters;
 
     write_genesis_config(&workspace_root, &genesis_config)?;
 

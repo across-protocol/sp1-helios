@@ -16,9 +16,7 @@ contract DeployScript is Script {
         vm.startBroadcast();
 
         // Update the rollup config to match the current chain. If the starting block number is 0, the latest block number and starting output root will be fetched.
-        // ! todo: commented, cause it's removing updaters from .json
-        // updateGenesisConfig();
-        // return address(0);
+        updateGenesisConfig();
 
         SP1Helios.InitParams memory params = readGenesisConfig();
 
@@ -27,22 +25,18 @@ contract DeployScript is Script {
             params.verifier = address(new SP1MockVerifier());
         }
 
-        // Use the updaters from genesis.json
-        // If no updaters are provided in genesis.json, we'll revert during contract deployment
-        // as the SP1Helios constructor checks for this with the NoUpdatersProvided error
-        
         // Deploy the SP1 Helios contract.
         SP1Helios helios = new SP1Helios(params);
 
         return address(helios);
     }
 
-    function readGenesisConfig() public returns (SP1Helios.InitParams memory params) {
+    function readGenesisConfig() public view returns (SP1Helios.InitParams memory params) {
         string memory root = vm.projectRoot();
         string memory path = string.concat(root, "/", "genesis.json");
         string memory json = vm.readFile(path);
 
-        // Manually parse each field from the JSON
+        // Manually parse each field from the JSON. Required because of `updaters` memory allocations
         params.executionStateRoot = vm.parseJsonBytes32(json, ".executionStateRoot");
         params.genesisTime = vm.parseJsonUint(json, ".genesisTime");
         params.genesisValidatorsRoot = vm.parseJsonBytes32(json, ".genesisValidatorsRoot");
@@ -56,11 +50,6 @@ contract DeployScript is Script {
         params.syncCommitteeHash = vm.parseJsonBytes32(json, ".syncCommitteeHash");
         params.verifier = vm.parseJsonAddress(json, ".verifier");
         params.updaters = vm.parseJsonAddressArray(json, ".updaters");
-
-        // No need for abi.decode anymore as we constructed the struct manually
-        // bytes memory data = vm.parseJson(json);
-        // return abi.decode(data, (SP1Helios.InitParams));
-        return params; // Return the manually constructed struct
     }
 
     function updateGenesisConfig() public {
