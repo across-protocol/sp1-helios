@@ -1,7 +1,6 @@
-use crate::api::{ProofData, ProofRequest, ProofStatus};
-use alloy_primitives::{Address, B256}; // Use alloy_primitives
+use crate::api::{ProofData, ProofRequest};
+use alloy_primitives::B256; // Use alloy_primitives
 use alloy_rlp::Encodable;
-use alloy_trie::proof;
 // Import Encodable for ProofRequest
 use redis::{aio::ConnectionManager, AsyncCommands};
 use serde::{Deserialize, Serialize};
@@ -42,9 +41,35 @@ impl From<B256> for ProofId {
     }
 }
 
+// todo: consider using this in enum below
+pub enum ProofRequestType {
+    Network(String),
+    CPU,
+    CUDA,
+    Mock,
+}
+
+// todo: consider converting this into a stateful enum
+/// Status of a proof generation request
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ProofStatus {
+    /// the proof was requested, but we haven't checked if it can be moved to generating right away, or wait for finality
+    Initiated,
+    /// the block for which the proof is requested is not yet part of a finalized chain
+    WaitingForFinality,
+    /// the ZK proof is being generated
+    Generating,
+    /// the proof generated succesfully. Ready for consumption
+    Success,
+    // todo: any other reasons for Errored status?
+    /// proof generation failed
+    Errored,
+}
+
 /// Represents the state of a proof request stored in Redis.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct StoredProofState {
+pub struct ProofState {
     pub status: ProofStatus,
     /// The original request that initiated this proof generation.
     request: ProofRequest,
@@ -142,7 +167,7 @@ impl ProofService {
     ///
     /// # Returns
     ///
-    /// * `Ok(ProofId)` - The ID of the requested proof (either existing or newly created).
+    /// * `Ok(ProofId)` - The ID of the requested proof. Only returns Ok if the proof was just created
     /// * `Err(ProofServiceError)` - If locking fails or an internal error occurs.
     pub async fn request_proof(
         &self,
@@ -171,12 +196,13 @@ impl ProofService {
             // --- Lock Acquired ---
             match current_state {
                 Some(state) => match state.status {
+                    // state exists and proof generation has errored before. We start a proof cycle anew here
                     ProofStatus::Errored => {
                         // todo: this branch and new request branch are identical. Reduce redundant code. Idk if it's possible to do nicely
                         // Previous proof errored for this ID. Request a new proof. Pretend that this is a new request
                         log::info!("Lock acquired for new proof request: {:?}", proof_id);
-                        let initial_state = StoredProofState {
-                            status: ProofStatus::Requested,
+                        let initial_state = ProofState {
+                            status: ProofStatus::Initiated,
                             request: request.clone(),
                             proof_network_tx_id: None,
                             proof_data: None,
@@ -211,18 +237,18 @@ impl ProofService {
                         });
                         // -------------------------------------------------
 
-                        // Optional: Explicitly delete lock - useful if task might finish quickly
-                        // todo: will this error if the lock is not present? Maybe we want that actually, cause the race might have happened
+                        // todo: will this error if the lock is not present? Maybe we want that, cause a race might have happened
                         conn.del::<_, ()>(&lock_key).await?;
                         Ok((proof_id, initial_state.status))
                     }
+                    // state exists and generation has not errored. Just return current status
                     _ => Ok((proof_id, state.status)),
                 },
                 None => {
                     // State does not exist, create and store initial state
                     log::info!("Lock acquired for new proof request: {:?}", proof_id);
-                    let initial_state = StoredProofState {
-                        status: ProofStatus::Requested,
+                    let initial_state = ProofState {
+                        status: ProofStatus::Initiated,
                         request: request.clone(),
                         proof_network_tx_id: None,
                         proof_data: None,
@@ -274,10 +300,7 @@ impl ProofService {
 
     /// Retrieves the full internal state of a proof request.
     /// Returns NotFound error if the request ID does not exist.
-    pub async fn get_proof_state(
-        &self,
-        id: ProofId,
-    ) -> Result<StoredProofState, ProofServiceError> {
+    pub async fn get_proof_state(&self, id: ProofId) -> Result<ProofState, ProofServiceError> {
         let mut conn_guard = self.redis_conn_manager.lock().await;
         let conn = &mut *conn_guard;
 
@@ -295,13 +318,13 @@ impl ProofService {
         &self,
         conn: &mut ConnectionManager,
         id: ProofId,
-    ) -> Result<Option<StoredProofState>, ProofServiceError> {
+    ) -> Result<Option<ProofState>, ProofServiceError> {
         let state_key = self.get_redis_state_key(id);
         let state_json: Option<String> = conn.get(&state_key).await?;
 
         match state_json {
             Some(json) => {
-                let state: StoredProofState = serde_json::from_str(&json)?; // Uses From trait for ProofServiceError::SerializationError
+                let state: ProofState = serde_json::from_str(&json)?; // Uses From trait for ProofServiceError::SerializationError
                 Ok(Some(state))
             }
             None => Ok(None),
@@ -327,11 +350,11 @@ impl ProofService {
 
         log::info!("Task {:?}: Starting proof generation flow.", proof_id);
 
-        // --- Phase 1: Update status to Pending ---
-        // We optimistically set to Pending. If the external call fails immediately,
+        // --- Phase 1: Update status to Generating ---
+        // We optimistically set to Generating. If the external call fails immediately,
         // we'll update to Errored later.
-        let pending_state = StoredProofState {
-            status: ProofStatus::Pending,
+        let pending_state = ProofState {
+            status: ProofStatus::Generating,
             request: request.clone(),
             proof_network_tx_id: None, // Will be set after simulated external call
             proof_data: None,
@@ -387,7 +410,7 @@ impl ProofService {
                     "Task {:?}: Proof generation successful. Status -> Success.",
                     proof_id
                 );
-                StoredProofState {
+                ProofState {
                     status: ProofStatus::Success,
                     request, // Take ownership of original request
                     proof_network_tx_id: Some(format!("simulated_tx_{}", proof_id.to_hex_string())),
@@ -401,7 +424,7 @@ impl ProofService {
                     proof_id,
                     err_msg
                 );
-                StoredProofState {
+                ProofState {
                     status: ProofStatus::Errored,
                     request,                   // Take ownership of original request
                     proof_network_tx_id: None, // No Tx ID if it failed

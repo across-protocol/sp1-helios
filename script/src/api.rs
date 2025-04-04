@@ -1,6 +1,6 @@
-use crate::proof_service::{ProofId, ProofService, ProofServiceError};
+use crate::proof_service::{ProofId, ProofService, ProofServiceError, ProofStatus};
 use alloy_primitives::{Address, B256};
-use alloy_rlp::{Encodable, RlpDecodable, RlpEncodable};
+use alloy_rlp::{RlpDecodable, RlpEncodable};
 use axum::{
     extract::{Path, State},
     http::StatusCode,
@@ -8,29 +8,35 @@ use axum::{
     routing::{get, post},
     serve, Json, Router,
 };
-use dotenv::dotenv;
 use log::{error, info};
 use serde::{Deserialize, Serialize};
-use std::env;
 use std::net::SocketAddr;
 use std::str::FromStr;
-use std::sync::Arc;
 use tokio::net::TcpListener;
-use tokio::sync::{mpsc, Mutex};
 use tokio::task::JoinHandle;
 
 /// Status of a proof generation request
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
-pub enum ProofStatus {
-    /// Proof request has been received and is being processed
-    Requested,
+pub enum ProofStatusResponse {
     /// Proof generation is in progress
     Pending,
     /// Proof generation was successful
     Success,
     /// Proof generation encountered an error
     Errored,
+}
+
+impl From<ProofStatus> for ProofStatusResponse {
+    fn from(status: ProofStatus) -> Self {
+        match status {
+            ProofStatus::Initiated | ProofStatus::WaitingForFinality | ProofStatus::Generating => {
+                ProofStatusResponse::Pending
+            }
+            ProofStatus::Success => ProofStatusResponse::Success,
+            ProofStatus::Errored => ProofStatusResponse::Errored,
+        }
+    }
 }
 
 // todo? make requesting possible by `proof_id` as well
@@ -45,13 +51,23 @@ pub struct ProofRequest {
     pub block_number: u64,
 }
 
+// todo: might want to return old_status, new_status
+/// Response for a proof request operation
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProofRequestResponse {
+    /// The unique identifier for the requested proof, as a hex string
+    pub proof_id: ProofId,
+    /// Current status of the proof generation
+    pub status: ProofStatusResponse,
+}
+
 /// Response to a proof generation request (used for API output)
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ProofState {
+pub struct ProofStateResponse {
     /// Unique ID for the proof request (hex-encoded keccak256 hash of request data)
-    pub proof_id: String, // Changed to hex string for API output
+    pub proof_id: ProofId,
     /// Status of the proof generation
-    pub status: ProofStatus,
+    pub status: ProofStatusResponse,
     /// Calldata for the update function (only present when status is Success)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub update_calldata: Option<ProofData>,
@@ -142,25 +158,21 @@ async fn health_handler() -> &'static str {
     "OK"
 }
 
-/// Request a new proof
+/// Handler function for new request_proof requests
 async fn request_proof_handler(
     State(service): State<ProofService>,
     Json(request): Json<ProofRequest>,
 ) -> Result<impl IntoResponse, ProofServiceError> {
-    // The ProofServiceError now implements IntoResponse, so we can use `?` or map_err
     let (proof_id, status) = service.request_proof(request).await?;
 
-    Ok((
-        StatusCode::ACCEPTED,
-        Json(serde_json::json!({
-           "proof_id": proof_id.to_hex_string(),
-           "status": status,
-           "message": "Proof request accepted"
-        })),
-    ))
+    let response = ProofRequestResponse {
+        proof_id,
+        status: status.into(),
+    };
+    Ok((StatusCode::ACCEPTED, Json(response)))
 }
 
-/// Get status and potentially the result of a specific proof by its ID (hex string).
+/// Handler function for new get_proof requests
 async fn get_proof_handler(
     State(service): State<ProofService>,
     Path(proof_id_hex): Path<String>,
@@ -178,9 +190,9 @@ async fn get_proof_handler(
     let stored_state = service.get_proof_state(proof_id).await?;
 
     // Construct the API response structure (ProofState)
-    let response_state = ProofState {
-        proof_id: proof_id.to_hex_string(),        // Use the correct ID
-        status: stored_state.status,               // Get status from stored state
+    let response_state = ProofStateResponse {
+        proof_id,                                  // todo: will serialize to a hex string?
+        status: stored_state.status.into(),        // Get status from stored state
         update_calldata: stored_state.proof_data, // Get data from stored state (will be None if not Success)
         error_message: stored_state.error_message, // Get error message from stored state (will be None if not Errored)
     };
