@@ -13,8 +13,8 @@ use axum::{
 };
 use log::{error, info};
 use serde::{Deserialize, Serialize};
-use std::net::SocketAddr;
 use std::str::FromStr;
+use std::{env, net::SocketAddr};
 use tokio::net::TcpListener;
 use tokio::task::JoinHandle;
 
@@ -203,12 +203,30 @@ async fn get_proof_handler(
 }
 
 /// Start the API server
-pub async fn start_api_server(port: u16, proof_service: ProofService) -> JoinHandle<()> {
+pub async fn start_api_server(proof_service: ProofService) -> JoinHandle<()> {
+    // Ensure environment variables are loaded
+    dotenv::dotenv().ok();
+
+    // Get API port from environment variable (required)
+    let api_port = match env::var("API_PORT") {
+        Ok(port_str) => match port_str.parse::<u16>() {
+            Ok(port) => port,
+            Err(e) => {
+                panic!("API_PORT must be a valid port number: {}", e);
+            }
+        },
+        Err(e) => {
+            panic!("API_PORT environment variable must be set: {}", e);
+        }
+    };
+
+    info!("Starting API server on port {}", api_port);
+
     // Create the API router
     let app = create_api_router(proof_service);
 
     // Create socket address
-    let addr = SocketAddr::from(([0, 0, 0, 0], port));
+    let addr = SocketAddr::from(([0, 0, 0, 0], api_port));
 
     // Create TCP listener
     let listener = match TcpListener::bind(addr).await {

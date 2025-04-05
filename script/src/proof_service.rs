@@ -154,7 +154,7 @@ impl ProofService {
     }
 
     /// Run the proof service, periodically checking for new finalized headers
-    pub async fn run(&mut self) -> anyhow::Result<()> {
+    pub async fn run_header_loop(self) -> anyhow::Result<()> {
         info!(
             "Starting finalized header polling loop with interval of {}s",
             self.header_check_interval_secs
