@@ -148,9 +148,8 @@ fn create_api_router(proof_service: ProofService) -> Router {
     Router::new()
         .route("/health", get(health_handler))
         .route("/api/proofs", post(request_proof_handler))
-        // GET /api/proofs/{proof_id_hex} - Get status/result by ProofId (hex string)
         .route("/api/proofs/{id}", get(get_proof_handler))
-        .with_state(proof_service) // Provide ProofService as state
+        .with_state(proof_service)
 }
 
 /// Health check endpoint
