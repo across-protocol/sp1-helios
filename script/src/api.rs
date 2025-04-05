@@ -1,4 +1,4 @@
-use crate::proof_service::{ProofId, ProofService, ProofServiceError, ProofStatus};
+use crate::proof_service::{ProofId, ProofRequestStatus, ProofService, ProofServiceError};
 use alloy_primitives::{Address, B256};
 use alloy_rlp::{RlpDecodable, RlpEncodable};
 use axum::{
@@ -27,14 +27,14 @@ pub enum ProofStatusResponse {
     Errored,
 }
 
-impl From<ProofStatus> for ProofStatusResponse {
-    fn from(status: ProofStatus) -> Self {
+impl From<ProofRequestStatus> for ProofStatusResponse {
+    fn from(status: ProofRequestStatus) -> Self {
         match status {
-            ProofStatus::Initiated | ProofStatus::WaitingForFinality | ProofStatus::Generating => {
-                ProofStatusResponse::Pending
-            }
-            ProofStatus::Success => ProofStatusResponse::Success,
-            ProofStatus::Errored => ProofStatusResponse::Errored,
+            ProofRequestStatus::Initiated
+            | ProofRequestStatus::WaitingForFinality
+            | ProofRequestStatus::Generating => ProofStatusResponse::Pending,
+            ProofRequestStatus::Success => ProofStatusResponse::Success,
+            ProofRequestStatus::Errored => ProofStatusResponse::Errored,
         }
     }
 }

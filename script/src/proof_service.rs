@@ -54,7 +54,7 @@ pub enum ProofRequestType {
 /// Status of a proof generation request
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
-pub enum ProofStatus {
+pub enum ProofRequestStatus {
     // todo: consider removing this status
     /// the proof was requested, but we haven't checked if it can be moved to generating right away, or wait for finality
     Initiated,
@@ -71,8 +71,8 @@ pub enum ProofStatus {
 
 /// Represents the state of a proof request stored in Redis.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ProofState {
-    pub status: ProofStatus,
+pub struct ProofRequestState {
+    pub status: ProofRequestStatus,
     /// The original request that initiated this proof generation.
     request: ProofRequest,
     /// Transaction hash or identifier from the external proof network (e.g., SP1).
@@ -83,11 +83,11 @@ pub struct ProofState {
     pub error_message: Option<String>,
 }
 
-impl ProofState {
+impl ProofRequestState {
     /// Creates a new ProofState with Initiated status and default values.
     pub fn new(request: ProofRequest) -> Self {
-        ProofState {
-            status: ProofStatus::Initiated,
+        ProofRequestState {
+            status: ProofRequestStatus::Initiated,
             request,
             proof_network_tx_id: None,
             proof_data: None,
@@ -125,10 +125,9 @@ pub struct ProofService {
     redis_key_prefix: String,
     redis_conn_manager: ConnectionManager,
 
-    // todo: do I use tokio mutex here, cause performace is not that important and I can avoid deadlocks easier?
-    // OH ROFL, it's already tokio::Mutex. I should probably change it to std::Mutex for now
+    // todo: using tokio mutex here. It allows for some flexibility at the cost of speed
+    // todo: Also, can it lead to deadlocks? Think about this
     inner: Arc<Mutex<ProofServiceInner>>,
-    // todo: add receiver channel for
 }
 
 pub struct ProofServiceInner {
@@ -175,7 +174,7 @@ impl ProofService {
     pub async fn request_proof(
         &self,
         request: ProofRequest,
-    ) -> Result<(ProofId, ProofStatus), ProofServiceError> {
+    ) -> Result<(ProofId, ProofRequestStatus), ProofServiceError> {
         let proof_id = ProofId::new(&request);
         let state_key = self.get_redis_state_key(proof_id);
         let lock_key = self.get_redis_lock_key(proof_id);
@@ -199,7 +198,8 @@ impl ProofService {
             .query_async(conn)
             .await?;
 
-        let current_state = self.get_stored_state(conn, proof_id).await?;
+        let redis_state_key = self.get_redis_state_key(proof_id);
+        let current_state = Self::get_stored_state(conn, &redis_state_key).await?;
 
         if acquired {
             // --- Lock Acquired ---
@@ -207,7 +207,7 @@ impl ProofService {
             match current_state {
                 Some(state) => match state.status {
                     // state exists and proof generation has errored before. We start a proof cycle anew here
-                    ProofStatus::Errored => {
+                    ProofRequestStatus::Errored => {
                         let proof_status = self
                             .initiate_request_processing(
                                 conn,
@@ -249,10 +249,14 @@ impl ProofService {
 
     /// Retrieves the full internal state of a proof request.
     /// Returns NotFound error if the request ID does not exist.
-    pub async fn get_proof_state(&self, id: ProofId) -> Result<ProofState, ProofServiceError> {
+    pub async fn get_proof_state(
+        &self,
+        id: ProofId,
+    ) -> Result<ProofRequestState, ProofServiceError> {
         let conn = &mut self.redis_conn_manager.clone();
 
-        match self.get_stored_state(conn, id).await {
+        let redis_state_key = self.get_redis_state_key(id);
+        match Self::get_stored_state(conn, &redis_state_key).await {
             Ok(state) => match state {
                 Some(state) => Ok(state),
                 None => Err(ProofServiceError::NotFound(id)),
@@ -263,16 +267,14 @@ impl ProofService {
 
     /// Internal helper to fetch and deserialize the state from Redis.
     async fn get_stored_state(
-        &self,
         conn: &mut ConnectionManager,
-        id: ProofId,
-    ) -> Result<Option<ProofState>, ProofServiceError> {
-        let state_key = self.get_redis_state_key(id);
-        let state_json: Option<String> = conn.get(&state_key).await?;
+        redis_state_key: &String,
+    ) -> Result<Option<ProofRequestState>, ProofServiceError> {
+        let state_json: Option<String> = conn.get(redis_state_key).await?;
 
         match state_json {
             Some(json) => {
-                let state: ProofState = serde_json::from_str(&json)?; // Uses From trait for ProofServiceError::SerializationError
+                let state: ProofRequestState = serde_json::from_str(&json)?; // Uses From trait for ProofServiceError::SerializationError
                 Ok(Some(state))
             }
             None => Ok(None),
@@ -288,13 +290,13 @@ impl ProofService {
         request: ProofRequest,
         redis_state_key: String,
         redis_lock_key: String,
-    ) -> Result<ProofStatus, ProofServiceError> {
-        let mut proof_state = ProofState::new(request.clone());
+    ) -> Result<ProofRequestStatus, ProofServiceError> {
+        let mut proof_state = ProofRequestState::new(request.clone());
 
         if latest_finalized_block >= request.block_number {
             // we can request a proof immediately and should do that here. It will continue in the backround and wait for proof to complete
             // Change status to ::Generating
-            proof_state.status = ProofStatus::Generating;
+            proof_state.status = ProofRequestStatus::Generating;
             conn.set::<_, _, ()>(&redis_state_key, serde_json::to_string(&proof_state)?)
                 .await?;
 
@@ -302,7 +304,7 @@ impl ProofService {
                 Self::request_proof_zkvm().await;
             });
         } else {
-            proof_state.status = ProofStatus::WaitingForFinality;
+            proof_state.status = ProofRequestStatus::WaitingForFinality;
             conn.set::<_, _, ()>(&redis_state_key, serde_json::to_string(&proof_state)?)
                 .await?;
         }
@@ -310,6 +312,125 @@ impl ProofService {
         // todo: will this error if the lock is not present? Maybe we want that, cause a race might have happened
         conn.del::<_, ()>(&redis_lock_key).await?;
         Ok(proof_state.status)
+    }
+
+    pub async fn update_finalized_header(
+        &self,
+        new_latest_finalized_header: LightClientHeader,
+    ) -> Result<(), ProofServiceError> {
+        // in this function, we hold 2 types of locks:
+        //  - self.inner lock for a finalized header throught the whole function
+        //  - redis locks for a specific proofId keys
+        // These entities are related parts of our state and we aim to avoid races between writing them
+
+        let mut inner = self.inner.lock().await;
+        inner.latest_finalized_header = new_latest_finalized_header;
+        let latest_finalized_block_number = *inner
+            .latest_finalized_header
+            .execution()
+            .map_err(|_| {
+                ProofServiceError::Internal("failed to get execution payload header".to_string())
+            })?
+            .block_number();
+
+        let requests_waiting_for_finality: Vec<ProofRequestState> =
+            self.get_proofs_waiting_for_finality().await;
+
+        // Store handles to join them later
+        let mut handles = Vec::new();
+
+        for proof_state in requests_waiting_for_finality {
+            let proof_id = ProofId::new(&proof_state.request);
+            let state_key = self.get_redis_state_key(proof_id);
+            let lock_key = self.get_redis_lock_key(proof_id);
+            let redis_lock_duration = self.redis_lock_duration;
+
+            let mut conn = self.redis_conn_manager.clone();
+            let handle = tokio::spawn(async move {
+                Self::try_start_proof_generation(
+                    &mut conn,
+                    proof_state,
+                    proof_id,
+                    state_key,
+                    lock_key,
+                    redis_lock_duration,
+                    latest_finalized_block_number,
+                )
+                .await
+            });
+
+            handles.push(handle);
+        }
+
+        // Wait for all individual Proof Requests to try to update before exiting the function and
+        // releasing header lock
+        for handle in handles {
+            // todo: think about how we want to retry here if we catch an error. Maybe schedule
+            // another `update_finalized_head` call in a couple seconds from the caller?
+            let _ = handle.await;
+        }
+
+        Ok(())
+    }
+
+    // todo: think about how we want to retry here
+    /// best-case effort to move exising ProofRequestState from ::WaitingForFinality to ::Generating
+    async fn try_start_proof_generation(
+        conn: &mut ConnectionManager,
+        _proof_state: ProofRequestState,
+        _proof_id: ProofId,
+        redis_state_key: String,
+        redis_lock_key: String,
+        redis_lock_duration: Duration,
+        latest_finalized_block_number: u64,
+    ) {
+        // Attempt to acquire distributed lock using SET NX EX
+        let acquired: bool = redis::cmd("SET")
+            .arg(&redis_lock_key)
+            .arg("locked") // Value doesn't matter much, existence does
+            .arg("NX") // Set only if key does not exist
+            .arg("PX") // Set expiry in milliseconds
+            .arg(redis_lock_duration.as_millis() as u64)
+            .query_async(conn)
+            .await
+            .unwrap();
+
+        if acquired {
+            // Fetch current state to verify it's still waiting for finality
+            if let Ok(Some(current_state)) = Self::get_stored_state(conn, &redis_state_key).await {
+                if current_state.status == ProofRequestStatus::WaitingForFinality
+                    && latest_finalized_block_number >= current_state.request.block_number
+                {
+                    // Update status to Generating
+                    let mut updated_state = current_state;
+                    updated_state.status = ProofRequestStatus::Generating;
+
+                    conn.set::<_, _, ()>(
+                        &redis_state_key,
+                        serde_json::to_string(&updated_state).unwrap(),
+                    )
+                    .await
+                    .unwrap();
+
+                    // Spawn background task to generate proof
+                    tokio::spawn(async move {
+                        Self::request_proof_zkvm().await;
+                    });
+                }
+            }
+
+            // Release the lock in all cases
+            let _: Result<(), _> = conn.del::<_, ()>(&redis_lock_key).await;
+        } else {
+            // skip this one. The state was present and now the lock is held. Someone else is
+            // trying to update header and will request the proof for this entry
+        }
+    }
+
+    // from redis
+    async fn get_proofs_waiting_for_finality(&self) -> Vec<ProofRequestState> {
+        // ! todo
+        Vec::new()
     }
 
     /// request proof generation from a ZKVM

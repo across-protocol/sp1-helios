@@ -11,7 +11,8 @@ use sp1_helios_script::{
     proof_service::ProofService,
 };
 use std::env;
-use tokio::signal;
+use std::time::Duration;
+use tokio::time;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -32,12 +33,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .parse()?;
     let redis_key_prefix =
         env::var("REDIS_KEY_PREFIX").unwrap_or_else(|_| "proof_service".to_string());
+    let finalized_header_check_interval_secs: u64 =
+        env::var("FINALIZED_HEADER_CHECK_INTERVAL_SECS")
+            .unwrap_or_else(|_| "30".to_string()) // Default to 30 seconds
+            .parse()?;
 
     info!("Configuration loaded:");
     info!(" - API Port: {}", api_port);
     info!(" - Redis URL: {}", redis_url); // Be cautious logging sensitive URLs in production
     info!(" - Redis Lock Duration: {}s", redis_lock_duration_secs);
     info!(" - Redis Key Prefix: {}", redis_key_prefix);
+    info!(
+        " - Finalized Header Check Interval: {}s",
+        finalized_header_check_interval_secs
+    );
 
     // --- Get Latest Finalized Header ---
     info!("Fetching latest finalized header...");
@@ -49,7 +58,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         &redis_url,
         redis_lock_duration_secs,
         redis_key_prefix,
-        latest_finalized_header,
+        latest_finalized_header.clone(),
     )
     .await
     {
@@ -64,25 +73,48 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
 
     // --- Start API Server ---
-    let api_server_handle = start_api_server(api_port, proof_service.clone()).await;
+    let _api_server_handle = start_api_server(api_port, proof_service.clone()).await;
     info!("API server started.");
 
-    // --- Wait for Shutdown Signal ---
-    info!("Operator running. Press Ctrl+C to shut down.");
-    match signal::ctrl_c().await {
-        Ok(()) => {
-            info!("Received shutdown signal. Shutting down ungracefully...");
-            api_server_handle.abort(); // Ungraceful shutdown: abort the API server immediately
-        }
-        Err(err) => {
-            error!("Failed to listen for shutdown signal: {}", err);
-            // Attempt to shut down anyway
-            api_server_handle.abort();
+    // --- Finalized Header Polling Loop ---
+    info!("Starting finalized header polling loop...");
+    let mut interval = time::interval(Duration::from_secs(finalized_header_check_interval_secs));
+    let mut current_header = latest_finalized_header;
+
+    loop {
+        interval.tick().await;
+
+        match get_latest_finalized_header().await {
+            Ok(new_header) => {
+                // todo: compare anything else here besides the beacon slot number?
+                // Check if the header is different from current one
+                if current_header.beacon().slot != new_header.beacon().slot {
+                    info!("New finalized header detected. Updating ProofService...");
+
+                    // Update the header in ProofService
+                    match proof_service
+                        .update_finalized_header(new_header.clone())
+                        .await
+                    {
+                        Ok(_) => {
+                            info!("ProofService finalized header updated successfully.");
+                            current_header = new_header;
+                        }
+                        Err(e) => {
+                            error!("Failed to update finalized header in ProofService: {}", e);
+                            // Continue with the same header, will try again next interval
+                        }
+                    }
+                } else {
+                    info!("No change in finalized header detected.");
+                }
+            }
+            Err(e) => {
+                error!("Failed to fetch latest finalized header: {}", e);
+                // Continue with the same header, will try again next interval
+            }
         }
     }
-
-    info!("Operator shut down complete.");
-    Ok(())
 }
 
 /// Fetches the latest finalized LightClientHeader for use with ProofService
