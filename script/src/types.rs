@@ -1,4 +1,4 @@
-use crate::api::{ProofData, ProofRequest};
+use crate::api::ProofRequest;
 use alloy_primitives::B256; // Use alloy_primitives
 use alloy_rlp::Encodable;
 use log::error;
@@ -80,6 +80,17 @@ impl ProofRequestState {
             error_message: None,
         }
     }
+}
+
+/// Data needed to call `SP1Helios.update`
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProofData {
+    /// ZK proof bytes to pass to the update function
+    pub proof: Vec<u8>,
+    /// Public values bytes to pass to the update function. Encoded `ProofOutputs`
+    pub public_values: Vec<u8>,
+    /// Beacon slot to pass to the update function
+    pub head: u64,
 }
 
 /// Errors that can occur within the ProofService.

@@ -1,6 +1,6 @@
 use crate::{
     proof_service::ProofService,
-    types::{ProofId, ProofRequestStatus, ProofServiceError},
+    types::{ProofData, ProofId, ProofRequestStatus, ProofServiceError},
 };
 use alloy_primitives::{Address, B256};
 use alloy_rlp::{RlpDecodable, RlpEncodable};
@@ -52,6 +52,8 @@ pub struct ProofRequest {
     pub storage_slot: B256,
     /// Block number on the source chain to prove against
     pub block_number: u64,
+    /// The caller must pass a valid head stored on associated destination chain contract
+    pub valid_contract_head: u64,
 }
 
 // todo: might want to return old_status, new_status
@@ -77,17 +79,6 @@ pub struct ProofStateResponse {
     /// Error message (only present when status is Errored)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error_message: Option<String>,
-}
-
-/// Data needed to call `SP1Helios.update`
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ProofData {
-    /// ZK proof bytes to pass to the update function
-    pub proof: Vec<u8>,
-    /// Public values bytes to pass to the update function. Encoded `ProofOutputs`
-    pub public_values: Vec<u8>,
-    /// Beacon slot to pass to the update function
-    pub head: u64,
 }
 
 // --- API Handlers & Router ---

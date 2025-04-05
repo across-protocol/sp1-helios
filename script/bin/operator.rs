@@ -122,6 +122,7 @@ impl SP1HeliosOperator {
     ) -> Result<Option<SP1ProofWithPublicValues>> {
         // Fetch required values.
         let provider = ProviderBuilder::new().on_http(self.rpc_url.clone());
+
         let src_exec_provider =
             ProviderBuilder::new().on_http(self.source_execution_rpc_url.clone());
         let contract = SP1Helios::new(self.contract_address, provider);

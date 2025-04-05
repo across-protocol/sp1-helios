@@ -1,7 +1,11 @@
 use crate::{
     api::ProofRequest,
-    get_client, get_latest_checkpoint,
+    get_checkpoint, get_client, get_latest_checkpoint, get_updates,
     types::{ProofId, ProofRequestState, ProofRequestStatus, ProofServiceError},
+};
+use alloy::{
+    providers::{ProviderBuilder, RootProvider},
+    transports::http::Http,
 };
 use anyhow::{anyhow, Context, Result};
 use helios_consensus_core::{
@@ -10,6 +14,8 @@ use helios_consensus_core::{
 };
 use helios_ethereum::rpc::ConsensusRpc;
 use log::{debug, error, info, warn};
+use reqwest::{Client, Url};
+use sp1_sdk::SP1Stdin;
 use std::env;
 // Import Encodable for ProofRequest
 use redis::{aio::ConnectionManager, AsyncCommands};
@@ -26,6 +32,8 @@ pub struct ProofService {
     redis_key_prefix: String,
     redis_conn_manager: ConnectionManager,
     header_check_interval_secs: u64,
+    source_chain_provider: RootProvider<Http<Client>>,
+    // todo: mb store latest_checkpoint here? E.g. attested_header + finalized_header
     latest_finalized_header: Arc<Mutex<LightClientHeader>>,
 }
 
@@ -34,6 +42,15 @@ impl ProofService {
     pub async fn new() -> anyhow::Result<Self> {
         // Ensure environment variables are loaded
         dotenv::dotenv().ok();
+
+        // required for storage slot merkle proving
+        let source_execution_rpc_url: Url = env::var("SOURCE_EXECUTION_RPC_URL")
+            .expect("SOURCE_EXECUTION_RPC_URL not set")
+            .parse()
+            .unwrap();
+
+        let source_chain_provider =
+            ProviderBuilder::new().on_http(source_execution_rpc_url.clone());
 
         // Read Redis configuration from environment variables with defaults
         let redis_url =
@@ -100,9 +117,9 @@ impl ProofService {
 
         const MAX_RETRIES: usize = 3;
         let mut retries = 0;
-        let latest_finalized_header = loop {
-            match Self::get_latest_finalized_header().await {
-                Ok(header) => break header,
+        let latest_finality_update = loop {
+            match Self::get_latest_finality_update().await {
+                Ok(finality_update) => break finality_update,
                 Err(e) if retries < MAX_RETRIES => {
                     retries += 1;
                     warn!(
@@ -122,7 +139,7 @@ impl ProofService {
 
         info!(
             "Latest finalized header retrieved successfully (slot: {}).",
-            latest_finalized_header.beacon().slot
+            latest_finality_update.finalized_header().beacon().slot
         );
 
         // Initialize Redis connection
@@ -143,10 +160,13 @@ impl ProofService {
         // Create the service instance
         let service = Self {
             redis_conn_manager,
-            latest_finalized_header: Arc::new(Mutex::new(latest_finalized_header)),
+            latest_finalized_header: Arc::new(Mutex::new(
+                latest_finality_update.finalized_header().clone(),
+            )),
             redis_lock_duration: Duration::from_secs(redis_lock_duration_secs),
             redis_key_prefix,
             header_check_interval_secs,
+            source_chain_provider,
         };
 
         info!("ProofService initialized successfully.");
@@ -172,8 +192,10 @@ impl ProofService {
             debug!("Checking for new finalized header...");
 
             // Attempt to get the latest finalized header
-            match Self::get_latest_finalized_header().await {
-                Ok(new_header) => {
+            match Self::get_latest_finality_update().await {
+                Ok(finality_update) => {
+                    let finalized_header = finality_update.finalized_header();
+
                     // Get the current header's slot number for comparison
                     let current_slot = {
                         let current_header = self.latest_finalized_header.lock().await;
@@ -181,23 +203,23 @@ impl ProofService {
                     };
 
                     // Compare the new header with the current one
-                    if new_header.beacon().slot > current_slot {
+                    if finalized_header.beacon().slot > current_slot {
                         info!(
                             "New finalized header detected. Slot: {} -> {}",
                             current_slot,
-                            new_header.beacon().slot
+                            finalized_header.beacon().slot
                         );
 
                         // Update the header
-                        match self.update_finalized_header(new_header).await {
+                        match self.process_finality_update(finality_update).await {
                             Ok(_) => info!("Updated finalized header successfully"),
                             Err(e) => error!("Failed to update finalized header: {}", e),
                         }
-                    } else if new_header.beacon().slot < current_slot {
+                    } else if finalized_header.beacon().slot < current_slot {
                         warn!(
                             "Received older finalized header. Current: {}, Received: {}",
                             current_slot,
-                            new_header.beacon().slot
+                            finalized_header.beacon().slot
                         );
                     } else {
                         debug!("No change in finalized header (slot: {})", current_slot);
@@ -311,8 +333,9 @@ impl ProofService {
             conn.set::<_, _, ()>(&redis_state_key, serde_json::to_string(&proof_state)?)
                 .await?;
 
+            let source_chain_provider = self.source_chain_provider.clone();
             tokio::spawn(async move {
-                Self::request_proof_zkvm().await;
+                Self::generate_and_store_proof(request, source_chain_provider).await;
             });
         } else {
             proof_state.status = ProofRequestStatus::WaitingForFinality;
@@ -327,28 +350,20 @@ impl ProofService {
 
     /// Read all ProofRequestStates from redis with status `::WaitingForFinality`.
     /// For each, try to start ZK proof generation and update status to `::Generating`
-    pub async fn update_finalized_header(
+    pub async fn process_finality_update(
         &self,
-        new_latest_finalized_header: LightClientHeader,
+        finality_update: FinalityUpdate<MainnetConsensusSpec>,
     ) -> Result<(), ProofServiceError> {
         // in this function, we hold 2 types of locks:
         //  - self.inner lock for a finalized header throught the whole function
         //  - redis locks for a specific proofId keys
         // These entities are related parts of our state and we aim to avoid races between writing them
-
         let mut latest_finalized_header = self.latest_finalized_header.lock().await;
-        *latest_finalized_header = new_latest_finalized_header;
-        let latest_finalized_block_number = *latest_finalized_header
-            .execution()
-            .map_err(|_| {
-                ProofServiceError::Internal("failed to get execution payload header".to_string())
-            })?
-            .block_number();
+        *latest_finalized_header = finality_update.finalized_header().clone();
 
         let requests_waiting_for_finality: Vec<ProofRequestState> =
             self.get_proofs_waiting_for_finality().await;
 
-        // Store handles to join them later
         let mut handles = Vec::new();
 
         for proof_state in requests_waiting_for_finality {
@@ -356,17 +371,20 @@ impl ProofService {
             let state_key = self.get_redis_state_key(proof_id);
             let lock_key = self.get_redis_lock_key(proof_id);
             let redis_lock_duration = self.redis_lock_duration;
+            let source_chain_provider = self.source_chain_provider.clone();
+            let finality_update = finality_update.clone();
 
             let mut conn = self.redis_conn_manager.clone();
             let handle = tokio::spawn(async move {
-                Self::try_start_proof_generation(
+                Self::try_initiate_proof_generation(
                     &mut conn,
                     proof_state,
                     proof_id,
                     state_key,
                     lock_key,
                     redis_lock_duration,
-                    latest_finalized_block_number,
+                    finality_update,
+                    source_chain_provider,
                 )
                 .await
             });
@@ -387,15 +405,23 @@ impl ProofService {
 
     // todo: think about how we want to retry here
     /// best-case effort to move exising ProofRequestState from ::WaitingForFinality to ::Generating
-    async fn try_start_proof_generation(
+    async fn try_initiate_proof_generation(
         conn: &mut ConnectionManager,
-        _proof_state: ProofRequestState,
+        proof_state: ProofRequestState,
         _proof_id: ProofId,
         redis_state_key: String,
         redis_lock_key: String,
         redis_lock_duration: Duration,
-        latest_finalized_block_number: u64,
-    ) {
+        finality_update: FinalityUpdate<MainnetConsensusSpec>,
+        source_chain_provider: RootProvider<Http<Client>>,
+    ) -> anyhow::Result<()> {
+        let latest_finalized_slot = finality_update.finalized_header().beacon().slot;
+        let latest_finalized_block_number = *finality_update
+            .finalized_header()
+            .execution()
+            .map_err(|_| anyhow!("failed to get execution block from finality_update"))?
+            .block_number();
+
         // Attempt to acquire distributed lock using SET NX EX
         let acquired: bool = redis::cmd("SET")
             .arg(&redis_lock_key)
@@ -411,7 +437,10 @@ impl ProofService {
             // Fetch current state to verify it's still waiting for finality
             if let Ok(Some(current_state)) = Self::get_stored_state(conn, &redis_state_key).await {
                 if current_state.status == ProofRequestStatus::WaitingForFinality
+                    // check that latest slot satisfies finality requirement
                     && latest_finalized_block_number >= current_state.request.block_number
+                    // check that the new finalized beacon slot is in the future compared to valid_contract_head
+                    && latest_finalized_slot > proof_state.request.valid_contract_head
                 {
                     // Update status to Generating
                     let mut updated_state = current_state;
@@ -426,7 +455,11 @@ impl ProofService {
 
                     // Spawn background task to generate proof
                     tokio::spawn(async move {
-                        Self::request_proof_zkvm().await;
+                        let _ = Self::generate_and_store_proof(
+                            proof_state.request,
+                            source_chain_provider,
+                        )
+                        .await;
                     });
                 }
             }
@@ -437,6 +470,8 @@ impl ProofService {
             // skip this one. The state was present and now the lock is held. Someone else is
             // trying to update header and will request the proof for this entry
         }
+
+        Ok(())
     }
 
     // from redis
@@ -446,9 +481,34 @@ impl ProofService {
     }
 
     /// request proof generation from a ZKVM
-    async fn request_proof_zkvm() {
-        // request proof with proper inputs and store result to redis
-        // todo!();
+    async fn generate_and_store_proof(
+        request: ProofRequest,
+        source_chain_provider: RootProvider<Http<Client>>,
+    ) -> anyhow::Result<()> {
+        // This function is limited to ONE instance per proof request per all possible machines
+        // AND the current status in Redis is ::Generating. This function has full control over
+        // this proof request entry and shouldn't need any locking
+
+        // Fetch the checkpoint at that slot
+        let checkpoint = get_checkpoint(request.valid_contract_head).await;
+
+        // Get the client from the checkpoint
+        let client = get_client(checkpoint).await;
+
+        let mut stdin = SP1Stdin::new();
+
+        // Setup client.
+        let mut sync_committee_updates = get_updates(&client).await;
+        let finality_update: FinalityUpdate<MainnetConsensusSpec> =
+            client.rpc.get_finality_update().await.unwrap();
+
+        let latest_finalized_header = finality_update.finalized_header();
+
+        let latest_finalized_execution_header = latest_finalized_header
+            .execution()
+            .map_err(|_e| anyhow::anyhow!("Failed to get execution payload header"))?;
+
+        Ok(())
     }
 
     /// Retrieves the full internal state of a proof request.
@@ -498,21 +558,20 @@ impl ProofService {
     }
 
     /// Fetches the latest finalized LightClientHeader for use with ProofService
-    async fn get_latest_finalized_header() -> Result<LightClientHeader, Box<dyn std::error::Error>>
-    {
-        // Get the latest checkpoint
+    async fn get_latest_finality_update() -> anyhow::Result<FinalityUpdate<MainnetConsensusSpec>> {
+        // TODO: just use bootstrap slot from .env or something else ... IDK yet
         let checkpoint = get_latest_checkpoint().await;
 
         // Create a client from the checkpoint
         let client = get_client(checkpoint).await;
 
+        // !!! TODO: is finality update dependent on the checkpoint??? Test with different checkpoints
+        // It might not. The light client just needs some checkpoint to start from
         // Get the finality update
-        let finality_update: FinalityUpdate<MainnetConsensusSpec> =
-            client.rpc.get_finality_update().await?;
-
-        // Extract the finalized header
-        let latest_finalized_header = finality_update.finalized_header();
-
-        Ok(latest_finalized_header.clone())
+        client
+            .rpc
+            .get_finality_update()
+            .await
+            .map_err(|e| anyhow!("get_latest_finality_update error: {}", e))
     }
 }
