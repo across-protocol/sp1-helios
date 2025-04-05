@@ -1,9 +1,10 @@
 use crate::api::ProofRequest;
-use alloy_primitives::B256; // Use alloy_primitives
+use alloy_primitives::B256;
 use alloy_rlp::Encodable;
 use log::error;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
+use utoipa::ToSchema;
 
 /// Unique identifier for a proof request, derived from the Keccak256 hash of its RLP-encoded content.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)] // B256 derives these traits
@@ -83,7 +84,7 @@ impl ProofRequestState {
 }
 
 /// Data needed to call `SP1Helios.update`
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct ProofData {
     /// ZK proof bytes to pass to the update function
     pub proof: Vec<u8>,

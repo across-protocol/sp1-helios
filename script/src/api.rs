@@ -17,9 +17,11 @@ use std::str::FromStr;
 use std::{env, net::SocketAddr};
 use tokio::net::TcpListener;
 use tokio::task::JoinHandle;
+use utoipa::{OpenApi, ToSchema};
+use utoipa_swagger_ui::SwaggerUi;
 
 /// Status of a proof generation request
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum ProofStatusResponse {
     /// Proof generation is in progress
@@ -42,8 +44,20 @@ impl From<ProofRequestStatus> for ProofStatusResponse {
     }
 }
 
-// todo? make requesting possible by `proof_id` as well
-/// Request for generating a storage slot proof
+// Create API-friendly version of ProofRequest with strings
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct ApiProofRequest {
+    /// Contract address to prove a storage slot for (hex string with 0x prefix)
+    pub contract_address: String,
+    /// Storage slot key to prove (hex string with 0x prefix)
+    pub storage_slot: String,
+    /// Block number on the source chain to prove against
+    pub block_number: u64,
+    /// The caller must pass a valid head stored on associated destination chain contract
+    pub valid_contract_head: u64,
+}
+
+// Keep original RLP structure for internal use
 #[derive(Debug, Clone, Serialize, Deserialize, RlpEncodable, RlpDecodable)]
 pub struct ProofRequest {
     /// Contract address to prove a storage slot for
@@ -56,21 +70,38 @@ pub struct ProofRequest {
     pub valid_contract_head: u64,
 }
 
-// todo: might want to return old_status, new_status
+// Convert API request to internal request
+impl TryFrom<ApiProofRequest> for ProofRequest {
+    type Error = ProofServiceError;
+
+    fn try_from(req: ApiProofRequest) -> Result<Self, Self::Error> {
+        Ok(ProofRequest {
+            contract_address: Address::from_str(&req.contract_address).map_err(|_| {
+                ProofServiceError::Internal("Invalid contract address format".to_string())
+            })?,
+            storage_slot: B256::from_str(&req.storage_slot).map_err(|_| {
+                ProofServiceError::Internal("Invalid storage slot format".to_string())
+            })?,
+            block_number: req.block_number,
+            valid_contract_head: req.valid_contract_head,
+        })
+    }
+}
+
 /// Response for a proof request operation
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct ProofRequestResponse {
     /// The unique identifier for the requested proof, as a hex string
-    pub proof_id: ProofId,
+    pub proof_id: String,
     /// Current status of the proof generation
     pub status: ProofStatusResponse,
 }
 
 /// Response to a proof generation request (used for API output)
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct ProofStateResponse {
     /// Unique ID for the proof request (hex-encoded keccak256 hash of request data)
-    pub proof_id: ProofId,
+    pub proof_id: String,
     /// Status of the proof generation
     pub status: ProofStatusResponse,
     /// Calldata for the update function (only present when status is Success)
@@ -80,6 +111,25 @@ pub struct ProofStateResponse {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error_message: Option<String>,
 }
+
+// --- API Documentation ---
+
+#[derive(OpenApi)]
+#[openapi(
+    paths(health_handler, request_proof_handler, get_proof_handler),
+    components(
+        schemas(
+            ApiProofRequest,
+            ProofStatusResponse,
+            ProofRequestResponse,
+            ProofStateResponse
+        )
+    ),
+    tags(
+        (name = "helios-proof-service", description = "Helios Proof Service API")
+    )
+)]
+pub struct ApiDoc;
 
 // --- API Handlers & Router ---
 
@@ -143,29 +193,68 @@ fn create_api_router(proof_service: ProofService) -> Router {
         .route("/health", get(health_handler))
         .route("/api/proofs", post(request_proof_handler))
         .route("/api/proofs/{id}", get(get_proof_handler))
+        // Add Swagger UI
+        .merge(SwaggerUi::new("/swagger-ui").url("/api-docs/openapi.json", ApiDoc::openapi()))
         .with_state(proof_service)
 }
 
 /// Health check endpoint
+#[utoipa::path(
+    get,
+    path = "/health",
+    tag = "helios-proof-service",
+    responses(
+        (status = 200, description = "Service is healthy", body = String)
+    )
+)]
 async fn health_handler() -> &'static str {
     "OK"
 }
 
 /// Handler function for new request_proof requests
+#[utoipa::path(
+    post,
+    path = "/api/proofs",
+    tag = "helios-proof-service",
+    request_body = ApiProofRequest,
+    responses(
+        (status = 202, description = "Proof request accepted", body = ProofRequestResponse),
+        (status = 400, description = "Invalid request data"),
+        (status = 409, description = "Request already being processed"),
+        (status = 500, description = "Internal server error")
+    )
+)]
 async fn request_proof_handler(
     State(service): State<ProofService>,
-    Json(request): Json<ProofRequest>,
+    Json(api_request): Json<ApiProofRequest>,
 ) -> Result<impl IntoResponse, ProofServiceError> {
+    // Convert API request to internal request type
+    let request = ProofRequest::try_from(api_request)?;
+
     let (proof_id, status) = service.request_proof(request).await?;
 
     let response = ProofRequestResponse {
-        proof_id,
+        proof_id: proof_id.to_hex_string(),
         status: status.into(),
     };
     Ok((StatusCode::ACCEPTED, Json(response)))
 }
 
 /// Handler function for new get_proof requests
+#[utoipa::path(
+    get,
+    path = "/api/proofs/{id}",
+    tag = "helios-proof-service",
+    params(
+        ("id" = String, Path, description = "Proof ID (hex string)")
+    ),
+    responses(
+        (status = 200, description = "Proof information retrieved", body = ProofStateResponse),
+        (status = 404, description = "Proof not found"),
+        (status = 400, description = "Invalid proof ID format"),
+        (status = 500, description = "Internal server error")
+    )
+)]
 async fn get_proof_handler(
     State(service): State<ProofService>,
     Path(proof_id_hex): Path<String>,
@@ -174,7 +263,6 @@ async fn get_proof_handler(
     let proof_id_bytes = B256::from_str(&proof_id_hex).map_err(|_| {
         // Return a more specific API error for bad input format
         ProofServiceError::Internal(format!("Invalid proof ID format: {}", proof_id_hex))
-        // Consider adding a dedicated BadInput variant to ProofServiceError
     })?;
     // Convert B256 to ProofId using the From trait
     let proof_id: ProofId = proof_id_bytes.into();
@@ -184,10 +272,10 @@ async fn get_proof_handler(
 
     // Construct the API response structure (ProofState)
     let response_state = ProofStateResponse {
-        proof_id,                                  // todo: will serialize to a hex string?
-        status: stored_state.status.into(),        // Get status from stored state
-        update_calldata: stored_state.proof_data, // Get data from stored state (will be None if not Success)
-        error_message: stored_state.error_message, // Get error message from stored state (will be None if not Errored)
+        proof_id: proof_id.to_hex_string(),
+        status: stored_state.status.into(),
+        update_calldata: stored_state.proof_data,
+        error_message: stored_state.error_message,
     };
 
     Ok((StatusCode::OK, Json(response_state)))

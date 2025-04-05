@@ -335,7 +335,7 @@ impl ProofService {
 
             let source_chain_provider = self.source_chain_provider.clone();
             tokio::spawn(async move {
-                Self::generate_and_store_proof(request, source_chain_provider).await;
+                let _ = Self::generate_and_store_proof(request, source_chain_provider).await;
             });
         } else {
             proof_state.status = ProofRequestStatus::WaitingForFinality;

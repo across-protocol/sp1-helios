@@ -49,6 +49,9 @@ alloy-rlp = { workspace = true }
 axum = "0.8.3"
 redis = { version = "0.26.0", features = ["tokio-comp", "connection-manager"] }
 thiserror = { workspace = true }
+utoipa = { version = "5.3.1", features = ["axum_extras"] }
+utoipa-swagger-ui = { version = "9.0.1", features = ["axum"] }
+utoipa-axum = "0.2.0"
 
 [build-dependencies]
 sp1-build = { workspace = true }
