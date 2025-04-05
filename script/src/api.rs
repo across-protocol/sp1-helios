@@ -1,4 +1,7 @@
-use crate::proof_service::{ProofId, ProofRequestStatus, ProofService, ProofServiceError};
+use crate::{
+    proof_service::ProofService,
+    types::{ProofId, ProofRequestStatus, ProofServiceError},
+};
 use alloy_primitives::{Address, B256};
 use alloy_rlp::{RlpDecodable, RlpEncodable};
 use axum::{

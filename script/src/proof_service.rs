@@ -1,190 +1,235 @@
-use crate::api::{ProofData, ProofRequest};
-use alloy_primitives::B256; // Use alloy_primitives
-use alloy_rlp::Encodable;
-use helios_consensus_core::types::LightClientHeader;
+use crate::{
+    api::ProofRequest,
+    get_client, get_latest_checkpoint,
+    types::{ProofId, ProofRequestState, ProofRequestStatus, ProofServiceError},
+};
+use anyhow::{anyhow, Context, Result};
+use helios_consensus_core::{
+    consensus_spec::MainnetConsensusSpec,
+    types::{FinalityUpdate, LightClientHeader},
+};
+use helios_ethereum::rpc::ConsensusRpc;
+use log::{debug, error, info, warn};
+use std::env;
 // Import Encodable for ProofRequest
 use redis::{aio::ConnectionManager, AsyncCommands};
-use serde::{Deserialize, Serialize};
 use std::{sync::Arc, time::Duration};
-use thiserror::Error;
 use tokio::sync::Mutex;
-
-// --- Core Types ---
-
-/// Unique identifier for a proof request, derived from the Keccak256 hash of its RLP-encoded content.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)] // B256 derives these traits
-pub struct ProofId(B256);
-
-impl ProofId {
-    /// Creates a new ProofId by RLP encoding the ProofRequest and hashing it with Keccak256.
-    pub fn new(request: &ProofRequest) -> Self {
-        let mut buf = Vec::new();
-        // ProofRequest needs RlpEncodable from api.rs
-        request.encode(&mut buf);
-        ProofId(alloy_primitives::keccak256(&buf))
-    }
-
-    /// Returns the underlying B256 hash of the ProofId.
-    pub fn hash(&self) -> B256 {
-        self.0
-    }
-
-    /// Returns the hash as a hex string prefixed with "0x".
-    pub fn to_hex_string(&self) -> String {
-        format!("{:x}", self.0)
-    }
-}
-
-// Implement From<B256> for ProofId
-impl From<B256> for ProofId {
-    fn from(hash: B256) -> Self {
-        ProofId(hash)
-    }
-}
-
-// todo: consider using this in enum below
-pub enum ProofRequestType {
-    Network(String),
-    CPU,
-    CUDA,
-    Mock,
-}
-
-// todo: consider converting this into a stateful enum
-/// Status of a proof generation request
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-pub enum ProofRequestStatus {
-    // todo: consider removing this status
-    /// the proof was requested, but we haven't checked if it can be moved to generating right away, or wait for finality
-    Initiated,
-    /// the block for which the proof is requested is not yet part of a finalized chain
-    WaitingForFinality,
-    /// the ZK proof is being generated
-    Generating,
-    /// the proof generated succesfully. Ready for consumption
-    Success,
-    // todo: any other reasons for Errored status?
-    /// proof generation failed
-    Errored,
-}
-
-/// Represents the state of a proof request stored in Redis.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ProofRequestState {
-    pub status: ProofRequestStatus,
-    /// The original request that initiated this proof generation.
-    request: ProofRequest,
-    /// Transaction hash or identifier from the external proof network (e.g., SP1).
-    proof_network_tx_id: Option<String>,
-    /// Final proof data, available only on success.
-    pub proof_data: Option<ProofData>,
-    /// Error message if proof generation failed.
-    pub error_message: Option<String>,
-}
-
-impl ProofRequestState {
-    /// Creates a new ProofState with Initiated status and default values.
-    pub fn new(request: ProofRequest) -> Self {
-        ProofRequestState {
-            status: ProofRequestStatus::Initiated,
-            request,
-            proof_network_tx_id: None,
-            proof_data: None,
-            error_message: None,
-        }
-    }
-}
-
-/// Errors that can occur within the ProofService.
-#[derive(Error, Debug)]
-pub enum ProofServiceError {
-    #[error("Redis error: {0}")]
-    RedisError(#[from] redis::RedisError),
-    #[error("Failed to acquire lock for proof request ID {0:?}, likely already processing.")]
-    LockContention(ProofId),
-    #[error("Proof request not found: {0:?}")]
-    NotFound(ProofId),
-    #[error("Failed to serialize/deserialize state: {0}")]
-    SerializationError(#[from] serde_json::Error), // Added variant for serde_json errors
-    #[error("Proof generation failed for ID {0:?}: {1}")]
-    ProofGenerationFailed(ProofId, String),
-    #[error("Internal service error: {0}")]
-    Internal(String),
-}
-
-// --- Proof Service ---
 
 /// Service responsible for managing the lifecycle of ZK proof generation requests.
 ///
 /// It uses Redis for state management and locking, and interacts with an
 /// external asynchronous function to trigger the actual proof computation.
-#[derive(Clone)] // Clone is required for Axum state
+#[derive(Clone)]
 pub struct ProofService {
     redis_lock_duration: Duration,
     redis_key_prefix: String,
     redis_conn_manager: ConnectionManager,
-
-    // todo: using tokio mutex here. It allows for some flexibility at the cost of speed
-    // todo: Also, can it lead to deadlocks? Think about this
-    inner: Arc<Mutex<ProofServiceInner>>,
-}
-
-pub struct ProofServiceInner {
-    latest_finalized_header: LightClientHeader,
+    header_check_interval_secs: u64,
+    latest_finalized_header: Arc<Mutex<LightClientHeader>>,
 }
 
 impl ProofService {
-    pub async fn new(
-        redis_url: &str,
-        redis_lock_duration_secs: u64,
-        redis_key_prefix: String,
-        // todo: decide where this gets created
-        latest_finalized_header: LightClientHeader,
-    ) -> Result<Self, ProofServiceError> {
-        let client = redis::Client::open(redis_url)?;
-        let redis_conn_manager = ConnectionManager::new(client).await?;
+    /// Initialize a new ProofService with configuration from environment variables
+    pub async fn new() -> anyhow::Result<Self> {
+        // Ensure environment variables are loaded
+        dotenv::dotenv().ok();
 
-        Ok(Self {
+        // Read Redis configuration from environment variables with defaults
+        let redis_url =
+            env::var("REDIS_URL").context("REDIS_URL environment variable must be set")?;
+
+        let redis_lock_duration_secs: u64 = match env::var("REDIS_LOCK_DURATION_SECS") {
+            Ok(val) => match val.parse() {
+                Ok(num) if num > 0 => num,
+                Ok(_) => {
+                    warn!("REDIS_LOCK_DURATION_SECS must be > 0, using default of 2");
+                    2
+                }
+                Err(_) => {
+                    warn!("REDIS_LOCK_DURATION_SECS not a valid number, using default of 2");
+                    2
+                }
+            },
+            Err(_) => {
+                info!("REDIS_LOCK_DURATION_SECS not set, using default of 2");
+                2
+            }
+        };
+
+        let redis_key_prefix = match env::var("REDIS_KEY_PREFIX") {
+            Ok(prefix) if !prefix.trim().is_empty() => prefix,
+            _ => {
+                info!("REDIS_KEY_PREFIX not set or empty, using default 'proof_service'");
+                "proof_service".to_string()
+            }
+        };
+
+        // Read polling interval configuration
+        let header_check_interval_secs: u64 = match env::var("FINALIZED_HEADER_CHECK_INTERVAL_SECS")
+        {
+            Ok(val) => match val.parse() {
+                Ok(num) if num > 0 => num,
+                Ok(_) => {
+                    warn!("FINALIZED_HEADER_CHECK_INTERVAL_SECS must be > 0, using default of 30");
+                    30
+                }
+                Err(_) => {
+                    warn!("FINALIZED_HEADER_CHECK_INTERVAL_SECS not a valid number, using default of 30");
+                    30
+                }
+            },
+            Err(_) => {
+                info!("FINALIZED_HEADER_CHECK_INTERVAL_SECS not set, using default of 30");
+                30
+            }
+        };
+
+        // Log configuration
+        info!("ProofService configuration:");
+        info!(" - Redis URL: {}", redis_url);
+        info!(" - Redis Lock Duration: {}s", redis_lock_duration_secs);
+        info!(" - Redis Key Prefix: {}", redis_key_prefix);
+        info!(
+            " - Finalized Header Check Interval: {}s",
+            header_check_interval_secs
+        );
+
+        // Fetch the latest finalized header with retries
+        info!("Fetching latest finalized header...");
+
+        const MAX_RETRIES: usize = 3;
+        let mut retries = 0;
+        let latest_finalized_header = loop {
+            match Self::get_latest_finalized_header().await {
+                Ok(header) => break header,
+                Err(e) if retries < MAX_RETRIES => {
+                    retries += 1;
+                    warn!(
+                        "Failed to get latest finalized header (attempt {}/{}): {}",
+                        retries, MAX_RETRIES, e
+                    );
+                    tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
+                }
+                Err(e) => {
+                    return Err(anyhow!(
+                        "Failed to get latest finalized header after multiple attempts: {}",
+                        e
+                    ));
+                }
+            }
+        };
+
+        info!(
+            "Latest finalized header retrieved successfully (slot: {}).",
+            latest_finalized_header.beacon().slot
+        );
+
+        // Initialize Redis connection
+        let client =
+            redis::Client::open(redis_url.as_str()).context("Failed to create Redis client")?;
+
+        let redis_conn_manager = match tokio::time::timeout(
+            tokio::time::Duration::from_secs(5),
+            ConnectionManager::new(client),
+        )
+        .await
+        {
+            Ok(Ok(conn)) => conn,
+            Ok(Err(e)) => return Err(anyhow!("Failed to connect to Redis: {}", e).into()),
+            Err(_) => return Err(anyhow!("Timed out connecting to Redis after 5 seconds").into()),
+        };
+
+        // Create the service instance
+        let service = Self {
             redis_conn_manager,
-            inner: Arc::new(Mutex::new(ProofServiceInner {
-                latest_finalized_header,
-            })),
+            latest_finalized_header: Arc::new(Mutex::new(latest_finalized_header)),
             redis_lock_duration: Duration::from_secs(redis_lock_duration_secs),
             redis_key_prefix,
-        })
+            header_check_interval_secs,
+        };
+
+        info!("ProofService initialized successfully.");
+        Ok(service)
     }
 
-    /// Generates the Redis key for storing the state of a specific proof request.
-    fn get_redis_state_key(&self, id: ProofId) -> String {
-        // Use hex representation of the B256 hash for the key
-        format!("{}:state:{}", self.redis_key_prefix, id.to_hex_string())
+    /// Run the proof service, periodically checking for new finalized headers
+    pub async fn run(&mut self) -> anyhow::Result<()> {
+        info!(
+            "Starting finalized header polling loop with interval of {}s",
+            self.header_check_interval_secs
+        );
+
+        // Create the ticker for our polling interval
+        let mut ticker =
+            tokio::time::interval(Duration::from_secs(self.header_check_interval_secs));
+
+        // Run the polling loop
+        loop {
+            // Wait for the next tick
+            ticker.tick().await;
+
+            debug!("Checking for new finalized header...");
+
+            // Attempt to get the latest finalized header
+            match Self::get_latest_finalized_header().await {
+                Ok(new_header) => {
+                    // Get the current header's slot number for comparison
+                    let current_slot = {
+                        let current_header = self.latest_finalized_header.lock().await;
+                        current_header.beacon().slot
+                    };
+
+                    // Compare the new header with the current one
+                    if new_header.beacon().slot > current_slot {
+                        info!(
+                            "New finalized header detected. Slot: {} -> {}",
+                            current_slot,
+                            new_header.beacon().slot
+                        );
+
+                        // Update the header
+                        match self.update_finalized_header(new_header).await {
+                            Ok(_) => info!("Updated finalized header successfully"),
+                            Err(e) => error!("Failed to update finalized header: {}", e),
+                        }
+                    } else if new_header.beacon().slot < current_slot {
+                        warn!(
+                            "Received older finalized header. Current: {}, Received: {}",
+                            current_slot,
+                            new_header.beacon().slot
+                        );
+                    } else {
+                        debug!("No change in finalized header (slot: {})", current_slot);
+                    }
+                }
+                Err(e) => {
+                    error!("Failed to fetch latest finalized header: {}", e);
+                    // Continue the loop, will try again at next interval
+                }
+            }
+        }
     }
 
-    /// Generates the Redis key used for locking a specific proof request during processing.
-    fn get_redis_lock_key(&self, id: ProofId) -> String {
-        // Use hex representation of the B256 hash for the key
-        format!("{}:lock:{}", self.redis_key_prefix, id.to_hex_string())
-    }
-
-    // in this function, we hold 2 locks:
-    //  - redis lock for a specific proofId key
-    //  - self.inner lock for a finalized header
-    // These 2 entities are related parts of our state and we aim to avoid races between writing them
     pub async fn request_proof(
         &self,
         request: ProofRequest,
     ) -> Result<(ProofId, ProofRequestStatus), ProofServiceError> {
+        // in this function, we hold 2 locks:
+        //  - redis lock for a specific proofId key
+        //  - latest_finalized_header lock
+        // These 2 entities are related parts of our state and we aim to avoid races between writing them
         let proof_id = ProofId::new(&request);
         let state_key = self.get_redis_state_key(proof_id);
         let lock_key = self.get_redis_lock_key(proof_id);
 
         // we want to hold this lock until this function exits because we can't update to the new
         // finalized head until we updated redis with this new request correctly
-        let inner = self.inner.lock().await;
+        let header = self.latest_finalized_header.lock().await;
 
-        // todo: remove unwrap here
-        let finalized_execution_header = inner.latest_finalized_header.execution().unwrap();
+        let finalized_execution_header = header.execution().map_err(|_| {
+            ProofServiceError::Internal("Failed to get execution payload header".to_string())
+        })?;
         let latest_finalized_block_number = *finalized_execution_header.block_number();
 
         let conn = &mut self.redis_conn_manager.clone();
@@ -209,7 +254,7 @@ impl ProofService {
                     // state exists and proof generation has errored before. We start a proof cycle anew here
                     ProofRequestStatus::Errored => {
                         let proof_status = self
-                            .initiate_request_processing(
+                            .create_new_request_entry(
                                 conn,
                                 latest_finalized_block_number,
                                 request,
@@ -224,7 +269,7 @@ impl ProofService {
                 },
                 None => {
                     let proof_status = self
-                        .initiate_request_processing(
+                        .create_new_request_entry(
                             conn,
                             latest_finalized_block_number,
                             request,
@@ -247,43 +292,9 @@ impl ProofService {
         }
     }
 
-    /// Retrieves the full internal state of a proof request.
-    /// Returns NotFound error if the request ID does not exist.
-    pub async fn get_proof_state(
-        &self,
-        id: ProofId,
-    ) -> Result<ProofRequestState, ProofServiceError> {
-        let conn = &mut self.redis_conn_manager.clone();
-
-        let redis_state_key = self.get_redis_state_key(id);
-        match Self::get_stored_state(conn, &redis_state_key).await {
-            Ok(state) => match state {
-                Some(state) => Ok(state),
-                None => Err(ProofServiceError::NotFound(id)),
-            },
-            Err(e) => Err(e),
-        }
-    }
-
-    /// Internal helper to fetch and deserialize the state from Redis.
-    async fn get_stored_state(
-        conn: &mut ConnectionManager,
-        redis_state_key: &String,
-    ) -> Result<Option<ProofRequestState>, ProofServiceError> {
-        let state_json: Option<String> = conn.get(redis_state_key).await?;
-
-        match state_json {
-            Some(json) => {
-                let state: ProofRequestState = serde_json::from_str(&json)?; // Uses From trait for ProofServiceError::SerializationError
-                Ok(Some(state))
-            }
-            None => Ok(None),
-        }
-    }
-
     /// This function assumes that the corresponding `redis_lock_key` is locked.
     /// Called after checking the proper conditions for starting a proof generation sequence.
-    async fn initiate_request_processing(
+    async fn create_new_request_entry(
         &self,
         conn: &mut ConnectionManager,
         latest_finalized_block: u64,
@@ -314,6 +325,8 @@ impl ProofService {
         Ok(proof_state.status)
     }
 
+    /// Read all ProofRequestStates from redis with status `::WaitingForFinality`.
+    /// For each, try to start ZK proof generation and update status to `::Generating`
     pub async fn update_finalized_header(
         &self,
         new_latest_finalized_header: LightClientHeader,
@@ -323,10 +336,9 @@ impl ProofService {
         //  - redis locks for a specific proofId keys
         // These entities are related parts of our state and we aim to avoid races between writing them
 
-        let mut inner = self.inner.lock().await;
-        inner.latest_finalized_header = new_latest_finalized_header;
-        let latest_finalized_block_number = *inner
-            .latest_finalized_header
+        let mut latest_finalized_header = self.latest_finalized_header.lock().await;
+        *latest_finalized_header = new_latest_finalized_header;
+        let latest_finalized_block_number = *latest_finalized_header
             .execution()
             .map_err(|_| {
                 ProofServiceError::Internal("failed to get execution payload header".to_string())
@@ -437,5 +449,70 @@ impl ProofService {
     async fn request_proof_zkvm() {
         // request proof with proper inputs and store result to redis
         // todo!();
+    }
+
+    /// Retrieves the full internal state of a proof request.
+    /// Returns NotFound error if the request ID does not exist.
+    pub async fn get_proof_state(
+        &self,
+        id: ProofId,
+    ) -> Result<ProofRequestState, ProofServiceError> {
+        let conn = &mut self.redis_conn_manager.clone();
+
+        let redis_state_key = self.get_redis_state_key(id);
+        match Self::get_stored_state(conn, &redis_state_key).await {
+            Ok(state) => match state {
+                Some(state) => Ok(state),
+                None => Err(ProofServiceError::NotFound(id)),
+            },
+            Err(e) => Err(e),
+        }
+    }
+
+    /// Internal helper to fetch and deserialize the state from Redis.
+    async fn get_stored_state(
+        conn: &mut ConnectionManager,
+        redis_state_key: &String,
+    ) -> Result<Option<ProofRequestState>, ProofServiceError> {
+        let state_json: Option<String> = conn.get(redis_state_key).await?;
+
+        match state_json {
+            Some(json) => {
+                let state: ProofRequestState = serde_json::from_str(&json)?;
+                Ok(Some(state))
+            }
+            None => Ok(None),
+        }
+    }
+
+    /// Generates the Redis key for storing the state of a specific proof request.
+    fn get_redis_state_key(&self, id: ProofId) -> String {
+        // Use hex representation of the B256 hash for the key
+        format!("{}:state:{}", self.redis_key_prefix, id.to_hex_string())
+    }
+
+    /// Generates the Redis key used for locking a specific proof request during processing.
+    fn get_redis_lock_key(&self, id: ProofId) -> String {
+        // Use hex representation of the B256 hash for the key
+        format!("{}:lock:{}", self.redis_key_prefix, id.to_hex_string())
+    }
+
+    /// Fetches the latest finalized LightClientHeader for use with ProofService
+    async fn get_latest_finalized_header() -> Result<LightClientHeader, Box<dyn std::error::Error>>
+    {
+        // Get the latest checkpoint
+        let checkpoint = get_latest_checkpoint().await;
+
+        // Create a client from the checkpoint
+        let client = get_client(checkpoint).await;
+
+        // Get the finality update
+        let finality_update: FinalityUpdate<MainnetConsensusSpec> =
+            client.rpc.get_finality_update().await?;
+
+        // Extract the finalized header
+        let latest_finalized_header = finality_update.finalized_header();
+
+        Ok(latest_finalized_header.clone())
     }
 }
