@@ -121,26 +121,17 @@ pub enum ProofServiceError {
 /// external asynchronous function to trigger the actual proof computation.
 #[derive(Clone)] // Clone is required for Axum state
 pub struct ProofService {
-    /// config
     redis_lock_duration: Duration,
     redis_key_prefix: String,
-
-    // ! todo. Consider moving `ConnectionManager` here
-    // redis_conn_manager: ConnectionManager,
+    redis_conn_manager: ConnectionManager,
 
     // todo: do I use tokio mutex here, cause performace is not that important and I can avoid deadlocks easier?
     // OH ROFL, it's already tokio::Mutex. I should probably change it to std::Mutex for now
-    /// state
     inner: Arc<Mutex<ProofServiceInner>>,
     // todo: add receiver channel for
 }
 
-// todo: this is not perfect. In reality, I need synchronization between redis write ops and last finalized header val, but I don't know how to acieve
-// that type of granularity. E.g. let redis reads to come through
-// Consider creating just 2 Arc<Mutex<>> members in ProofService, and lock in the same order every time
-/// inner struct to manage synchronizaion
 pub struct ProofServiceInner {
-    redis_conn_manager: ConnectionManager,
     latest_finalized_header: LightClientHeader,
 }
 
@@ -156,8 +147,8 @@ impl ProofService {
         let redis_conn_manager = ConnectionManager::new(client).await?;
 
         Ok(Self {
+            redis_conn_manager,
             inner: Arc::new(Mutex::new(ProofServiceInner {
-                redis_conn_manager,
                 latest_finalized_header,
             })),
             redis_lock_duration: Duration::from_secs(redis_lock_duration_secs),
@@ -177,6 +168,10 @@ impl ProofService {
         format!("{}:lock:{}", self.redis_key_prefix, id.to_hex_string())
     }
 
+    // in this function, we hold 2 locks:
+    //  - redis lock for a specific proofId key
+    //  - self.inner lock for a finalized header
+    // These 2 entities are related parts of our state and we aim to avoid races between writing them
     pub async fn request_proof(
         &self,
         request: ProofRequest,
@@ -185,13 +180,15 @@ impl ProofService {
         let state_key = self.get_redis_state_key(proof_id);
         let lock_key = self.get_redis_lock_key(proof_id);
 
-        let mut inner = self.inner.lock().await;
+        // we want to hold this lock until this function exits because we can't update to the new
+        // finalized head until we updated redis with this new request correctly
+        let inner = self.inner.lock().await;
 
         // todo: remove unwrap here
         let finalized_execution_header = inner.latest_finalized_header.execution().unwrap();
         let latest_finalized_block_number = *finalized_execution_header.block_number();
 
-        let conn = &mut inner.redis_conn_manager;
+        let conn = &mut self.redis_conn_manager.clone();
         // Attempt to acquire distributed lock using SET NX EX
         let acquired: bool = redis::cmd("SET")
             .arg(&lock_key)
@@ -253,8 +250,7 @@ impl ProofService {
     /// Retrieves the full internal state of a proof request.
     /// Returns NotFound error if the request ID does not exist.
     pub async fn get_proof_state(&self, id: ProofId) -> Result<ProofState, ProofServiceError> {
-        let mut inner = self.inner.lock().await;
-        let conn = &mut inner.redis_conn_manager;
+        let conn = &mut self.redis_conn_manager.clone();
 
         match self.get_stored_state(conn, id).await {
             Ok(state) => match state {
