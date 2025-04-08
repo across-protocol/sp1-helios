@@ -44,7 +44,6 @@ impl From<ProofRequestStatus> for ProofStatusResponse {
     }
 }
 
-// Create API-friendly version of ProofRequest with strings
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct ApiProofRequest {
     /// Contract address to prove a storage slot for (hex string with 0x prefix)
@@ -57,7 +56,6 @@ pub struct ApiProofRequest {
     pub valid_contract_head: u64,
 }
 
-// Keep original RLP structure for internal use
 #[derive(Debug, Clone, Serialize, Deserialize, RlpEncodable, RlpDecodable)]
 pub struct ProofRequest {
     /// Contract address to prove a storage slot for
@@ -70,7 +68,6 @@ pub struct ProofRequest {
     pub valid_contract_head: u64,
 }
 
-// Convert API request to internal request
 impl TryFrom<ApiProofRequest> for ProofRequest {
     type Error = ProofServiceError;
 
@@ -193,7 +190,6 @@ fn create_api_router(proof_service: ProofService) -> Router {
         .route("/health", get(health_handler))
         .route("/api/proofs", post(request_proof_handler))
         .route("/api/proofs/{id}", get(get_proof_handler))
-        // Add Swagger UI
         .merge(SwaggerUi::new("/swagger-ui").url("/api-docs/openapi.json", ApiDoc::openapi()))
         .with_state(proof_service)
 }
@@ -228,7 +224,6 @@ async fn request_proof_handler(
     State(service): State<ProofService>,
     Json(api_request): Json<ApiProofRequest>,
 ) -> Result<impl IntoResponse, ProofServiceError> {
-    // Convert API request to internal request type
     let request = ProofRequest::try_from(api_request)?;
 
     let (proof_id, status) = service.request_proof(request).await?;
@@ -259,18 +254,16 @@ async fn get_proof_handler(
     State(service): State<ProofService>,
     Path(proof_id_hex): Path<String>,
 ) -> Result<impl IntoResponse, ProofServiceError> {
-    // Parse the hex ID into B256
     let proof_id_bytes = B256::from_str(&proof_id_hex).map_err(|_| {
-        // Return a more specific API error for bad input format
         ProofServiceError::Internal(format!("Invalid proof ID format: {}", proof_id_hex))
     })?;
-    // Convert B256 to ProofId using the From trait
     let proof_id: ProofId = proof_id_bytes.into();
 
-    // Fetch the full internal state
-    let stored_state = service.get_proof_state(proof_id).await?;
+    let stored_state = match service.get_proof_request_state(&proof_id).await? {
+        Some(state) => state,
+        None => return Err(ProofServiceError::NotFound(proof_id)),
+    };
 
-    // Construct the API response structure (ProofState)
     let response_state = ProofStateResponse {
         proof_id: proof_id.to_hex_string(),
         status: stored_state.status.into(),
@@ -286,40 +279,26 @@ pub async fn start_api_server(proof_service: ProofService) -> JoinHandle<()> {
     // Ensure environment variables are loaded
     dotenv::dotenv().ok();
 
-    // Get API port from environment variable (required)
-    let api_port = match env::var("API_PORT") {
-        Ok(port_str) => match port_str.parse::<u16>() {
-            Ok(port) => port,
-            Err(e) => {
-                panic!("API_PORT must be a valid port number: {}", e);
-            }
-        },
-        Err(e) => {
-            panic!("API_PORT environment variable must be set: {}", e);
-        }
-    };
+    let api_port = env::var("API_PORT")
+        .expect("API_PORT environment variable must be set")
+        .parse::<u16>()
+        .expect("API_PORT must be a valid number");
 
     info!("Starting API server on port {}", api_port);
 
-    // Create the API router
     let app = create_api_router(proof_service);
 
-    // Create socket address
-    let addr = SocketAddr::from(([0, 0, 0, 0], api_port));
+    let socket_addr = SocketAddr::from(([0, 0, 0, 0], api_port));
 
-    // Create TCP listener
-    let listener = match TcpListener::bind(addr).await {
+    let listener = match TcpListener::bind(socket_addr).await {
         Ok(l) => l,
         Err(e) => {
-            error!("Failed to bind API server to {}: {}", addr, e);
             panic!("Failed to bind API server: {}", e);
         }
     };
 
-    // Log the startup
-    info!("Starting API server on {}", addr);
+    info!("Starting API server on {}", socket_addr);
 
-    // Spawn the server task
     tokio::spawn(async move {
         serve(listener, app.into_make_service())
             .await

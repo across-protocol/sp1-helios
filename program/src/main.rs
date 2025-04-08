@@ -54,6 +54,9 @@ pub fn main() {
         apply_update(&mut store, update);
     }
 
+    // Finality update is almost like an Update from sync_commitee_updates, but without next_sync_committee fields
+    // next_sync_committee: None,
+    // next_sync_committee_branch: None,
     // 2. Apply finality update
     let finality_update_is_valid = verify_finality_update(
         &finality_update,
@@ -68,7 +71,11 @@ pub fn main() {
     }
     println!("Finality update is valid.");
 
+    // what if finality_update is default?
     apply_finality_update(&mut store, &finality_update);
+
+    let hh = finality_update.finalized_header();
+    let beacon_body_root = finality_update.finalized_header().beacon().body_root;
 
     // 3. Verify storage slot proofs
     let execution_state_root = *store

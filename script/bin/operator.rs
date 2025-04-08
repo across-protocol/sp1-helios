@@ -154,7 +154,13 @@ impl SP1HeliosOperator {
         let mut stdin = SP1Stdin::new();
 
         // Setup client.
+        // !!! `get_updates` gets updates from the current finalized block SYNC_COMMITEE_PERIOD with a cap of 128 updates
+        // Why does it cover only only 128 updates? I think there are 256 possible updates during a commitee period...
+        // !!! So this has nothing to do with how client is bootstrapped! Client has to be bootstrapped with a correct root
+        // to be able to check the correctness of all transitions provided to it.
+        // Look at the name of the variable though. Is it sync committee updates, not block finality updates being fetched?
         let mut sync_committee_updates = get_updates(&client).await;
+        // I think, gets only the last finality update
         let finality_update = client.rpc.get_finality_update().await.unwrap();
 
         // Check if contract is up to date
