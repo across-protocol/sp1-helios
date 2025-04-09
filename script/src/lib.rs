@@ -4,12 +4,13 @@ use helios_consensus_core::{
     consensus_spec::MainnetConsensusSpec,
     types::{BeaconBlock, Update},
 };
-use helios_ethereum::rpc::ConsensusRpc;
 use helios_ethereum::{
     config::{checkpoints, networks::Network, Config},
     consensus::Inner,
     rpc::http_rpc::HttpRpc,
 };
+use helios_ethereum::{consensus::ConsensusClient, database::ConfigDB, rpc::ConsensusRpc};
+use log::info;
 
 use std::sync::Arc;
 use tokio::sync::{mpsc::channel, watch};
@@ -111,4 +112,31 @@ pub async fn get_client(checkpoint: B256) -> Inner<MainnetConsensusSpec, HttpRpc
 
     client.bootstrap(checkpoint).await.unwrap();
     client
+}
+
+/// Creates a ConsensusClient that performs auto-updates every 12 seconds. Does all the required
+/// verifications on the state applied and streams out finalized blocks
+pub async fn create_streaming_client(
+    checkpoint: B256,
+) -> ConsensusClient<MainnetConsensusSpec, HttpRpc, ConfigDB> {
+    let consensus_rpc = std::env::var("SOURCE_CONSENSUS_RPC_URL").unwrap();
+    let chain_id = std::env::var("SOURCE_CHAIN_ID").unwrap();
+    let network = Network::from_chain_id(chain_id.parse().unwrap()).unwrap();
+    let base_config = network.to_base_config();
+
+    let config = Config {
+        consensus_rpc: consensus_rpc.to_string(),
+        execution_rpc: String::new(),
+        chain: base_config.chain,
+        forks: base_config.forks,
+        checkpoint: Some(checkpoint),
+        strict_checkpoint_age: false,
+        ..Default::default()
+    };
+
+    info!("CONFIG: {:?}", config);
+
+    info!("config.max_checkpoint_age: {:?}", config.max_checkpoint_age);
+
+    ConsensusClient::new(&consensus_rpc, Arc::new(config)).unwrap()
 }

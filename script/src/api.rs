@@ -59,13 +59,14 @@ pub struct ApiProofRequest {
 #[derive(Debug, Clone, Serialize, Deserialize, RlpEncodable, RlpDecodable)]
 pub struct ProofRequest {
     /// Contract address to prove a storage slot for
-    pub contract_address: Address,
+    pub hub_pool_address: Address,
     /// Storage slot key to prove
     pub storage_slot: B256,
     /// Block number on the source chain to prove against
     pub block_number: u64,
-    /// The caller must pass a valid head stored on associated destination chain contract
-    pub valid_contract_head: u64,
+    /// The caller must pass a valid head stored on associated destination chain contract.
+    /// A rule of thumb is to have this be earlier than block_number.
+    pub stored_contract_head: u64,
 }
 
 impl TryFrom<ApiProofRequest> for ProofRequest {
@@ -73,14 +74,14 @@ impl TryFrom<ApiProofRequest> for ProofRequest {
 
     fn try_from(req: ApiProofRequest) -> Result<Self, Self::Error> {
         Ok(ProofRequest {
-            contract_address: Address::from_str(&req.contract_address).map_err(|_| {
+            hub_pool_address: Address::from_str(&req.contract_address).map_err(|_| {
                 ProofServiceError::Internal("Invalid contract address format".to_string())
             })?,
             storage_slot: B256::from_str(&req.storage_slot).map_err(|_| {
                 ProofServiceError::Internal("Invalid storage slot format".to_string())
             })?,
             block_number: req.block_number,
-            valid_contract_head: req.valid_contract_head,
+            stored_contract_head: req.valid_contract_head,
         })
     }
 }

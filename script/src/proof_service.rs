@@ -1,11 +1,12 @@
 use crate::{
     api::ProofRequest,
-    get_checkpoint, get_client, get_latest_checkpoint, get_updates,
+    create_streaming_client, get_checkpoint, get_client, get_latest_checkpoint, get_updates,
     types::{ProofId, ProofRequestState, ProofRequestStatus, ProofServiceError},
 };
 use alloy::{
+    consensus::BlockHeader,
     network::Ethereum,
-    providers::{ProviderBuilder, RootProvider},
+    providers::{Provider, ProviderBuilder, RootProvider},
     transports::http::Http,
 };
 use anyhow::{anyhow, Context, Result};
@@ -13,13 +14,21 @@ use helios_consensus_core::{
     consensus_spec::MainnetConsensusSpec,
     types::{FinalityUpdate, LightClientHeader},
 };
-use helios_ethereum::rpc::ConsensusRpc;
+use helios_ethereum::{
+    config::Config,
+    rpc::{http_rpc::HttpRpc, ConsensusRpc},
+};
 use log::{debug, error, info, warn};
 use redis::{aio::ConnectionManager, AsyncCommands};
 use reqwest::{Client, Url};
+use sp1_helios_primitives::types::{ContractStorage, ProofInputs, StorageSlot};
 use sp1_sdk::SP1Stdin;
-use std::env;
 use std::time::Duration;
+use std::{env, sync::Arc};
+use tokio::{
+    select,
+    time::{interval_at, Instant},
+};
 
 /// Service responsible for managing the lifecycle of ZK proof generation requests.
 ///
@@ -111,56 +120,79 @@ impl ProofService {
 
     /// Run the proof service, periodically checking for new finalized headers
     pub async fn run(self) -> anyhow::Result<()> {
+        // todo: we might want to get checkpoint from .env to be 100% sure it's genuine
+        let checkpoint = get_latest_checkpoint().await;
         info!(
-            "Starting finalized header polling loop with interval of {}s",
-            self.header_check_interval_secs
+            target: "proof_service::run",
+            "Initializing light client on checkpoint {:?}",
+            checkpoint
         );
 
+        let mut light_client = get_client(checkpoint).await;
+        info!(
+            target: "proof_service::run",
+            "Initialized light client with finalized slot {}",
+            light_client.store.finalized_header.beacon().slot
+        );
+
+        let start = Instant::now() + light_client.duration_until_next_update().to_std().unwrap();
+        let mut interval = interval_at(start, std::time::Duration::from_secs(12));
+
+        info!(
+            target: "proof_service::run",
+            "Starting finalized header polling loop with interval of {}s",
+            12
+        );
+
+        // set to true to force update on statup
+        let mut should_advance_db_state = true;
         loop {
-            debug!("Checking for new finalized header...");
+            if should_advance_db_state {
+                let res = self
+                    .try_advance_redis_state(light_client.store.finalized_header.clone())
+                    .await;
 
-            match Self::get_latest_finality_update().await {
-                Ok(finality_update) => {
-                    // Retry up to 3 times with 1 second interval
-                    let mut attempts = 0;
-                    let max_attempts = 3;
-
-                    while attempts < max_attempts {
-                        match self
-                            .try_update_finalized_header(finality_update.clone())
-                            .await
-                        {
-                            Ok(_) => break,
-                            Err(e) => {
-                                attempts += 1;
-
-                                if attempts >= max_attempts {
-                                    error!(
-                                        "Failed to update finalized header after {} attempts: {}",
-                                        max_attempts, e
-                                    );
-                                } else {
-                                    debug!("Attempt {}/{} to update finalized header failed, retrying in 1s", 
-                                           attempts, max_attempts);
-                                    tokio::time::sleep(Duration::from_secs(1)).await;
-                                }
-                            }
+                match res {
+                    Ok(updated) => {
+                        if updated {
+                            info!(target: "proof_service::run", "updated redis state to new finalized header: slot {}", light_client.store.finalized_header.beacon().slot)
+                        } else {
+                            warn!(target: "proof_service::run", "try_advance_redis_state succeeded, but did not advance redis state: slot {}", light_client.store.finalized_header.beacon().slot)
                         }
+                        should_advance_db_state = false;
                     }
-                }
-                Err(e) => {
-                    error!("Failed to fetch latest finalized header: {}", e);
-                    // Continue the loop, will try again after sleeping
+                    Err(e) => {
+                        warn!(target: "proof_service::run", "failed to update redis state to new finalized header {}. Error: {}", light_client.store.finalized_header.beacon().slot, e)
+                    }
                 }
             }
 
-            tokio::time::sleep(Duration::from_secs(self.header_check_interval_secs)).await;
+            let _ = interval.tick().await;
+
+            let prev_finalized_slot = light_client.store.finalized_header.beacon().slot;
+            let res = light_client.advance().await;
+            if let Err(err) = res {
+                warn!(target: "proof_service::run", "advance error: {}", err);
+                continue;
+            }
+            let new_finalized_slot = light_client.store.finalized_header.beacon().slot;
+            if new_finalized_slot > prev_finalized_slot {
+                info!(
+                    target: "proof_service::run",
+                    "Light client finalized slot advanced successfully: {} -> {}",
+                    prev_finalized_slot, new_finalized_slot
+                );
+                should_advance_db_state = true;
+            }
         }
     }
 
-    async fn try_update_finalized_header(
+    /// Tries to apply `latest_finalized_header` to redis state. This means 2 things:
+    ///  - update finalized_header stored in redis
+    ///  - process all the proof requests waiting for finality for which finality has now been satisfied
+    async fn try_advance_redis_state(
         &self,
-        new_finality_update: FinalityUpdate<MainnetConsensusSpec>,
+        latest_finalized_header: LightClientHeader,
     ) -> Result<bool, ProofServiceError> {
         let acquired = self.try_acquire_redis_lock().await?;
         if !acquired {
@@ -171,7 +203,7 @@ impl ProofService {
         }
 
         let result = self
-            .try_update_finalized_header_inner(new_finality_update)
+            .try_advance_redis_state_under_lock(latest_finalized_header)
             .await;
 
         // best effort to delete the lock
@@ -182,17 +214,15 @@ impl ProofService {
         result
     }
 
-    /// This function assumes redis lock is held
-    async fn try_update_finalized_header_inner(
+    /// extension of `try_advance_redis_state`, assumes the redis lock is held
+    async fn try_advance_redis_state_under_lock(
         &self,
-        new_finality_update: FinalityUpdate<MainnetConsensusSpec>,
+        latest_finalized_header: LightClientHeader,
     ) -> Result<bool, ProofServiceError> {
-        let finalized_header = self.get_finalized_header().await?;
-        // todo: here, we're trusting that our light client object already checked this update for
-        // validity, so we don't perform any validity checks here. Is this correct?
-        let should_update_header: bool = match finalized_header {
-            Some(header) => {
-                header.beacon().slot < new_finality_update.finalized_header().beacon().slot
+        let stored_finalized_header = self.get_finalized_header().await?;
+        let should_update_header: bool = match stored_finalized_header {
+            Some(redis_header) => {
+                redis_header.beacon().slot < latest_finalized_header.beacon().slot
             }
             None => true,
         };
@@ -205,11 +235,12 @@ impl ProofService {
             let conn = &mut self.redis_conn_manager.clone();
 
             // 1. Gather requests that are ::WaitingForFinality
-            let waiting_requests = self.get_proofs_waiting_for_finality().await?;
+            let waiting_requests = self
+                .get_proof_requests_by_status(ProofRequestStatus::WaitingForFinality)
+                .await?;
 
             // 2. Decide which requests require updating based on the new finalized header
-            let finalized_header = new_finality_update.finalized_header();
-            let finalized_block_number = match finalized_header.execution() {
+            let finalized_block_number = match latest_finalized_header.execution() {
                 Ok(execution_header) => *execution_header.block_number(),
                 Err(_) => {
                     return Err(ProofServiceError::Internal(
@@ -217,7 +248,7 @@ impl ProofService {
                     ));
                 }
             };
-            let finalized_slot = finalized_header.beacon().slot;
+            let finalized_slot = latest_finalized_header.beacon().slot;
 
             // Prepare a transaction to update everything atomically
             let mut pipe = redis::pipe();
@@ -226,7 +257,7 @@ impl ProofService {
             // Add the new finalized header to the transaction
             pipe.set(
                 self.get_redis_key_finalized_header(),
-                serde_json::to_string(&finalized_header)?,
+                serde_json::to_string(&latest_finalized_header)?,
             );
 
             // Track which requests need to be processed further
@@ -236,7 +267,7 @@ impl ProofService {
             for proof_state in waiting_requests {
                 if proof_state.status == ProofRequestStatus::WaitingForFinality
                     && finalized_block_number >= proof_state.request.block_number
-                    && finalized_slot > proof_state.request.valid_contract_head
+                    && finalized_slot > proof_state.request.stored_contract_head
                 {
                     // Update status to Generating
                     let mut updated_state = proof_state.clone();
@@ -269,15 +300,8 @@ impl ProofService {
                 });
             }
 
-            // todo: better lock deletion logic
-            let _: Result<(), _> = conn.del::<_, ()>(self.get_redis_lock_key()).await;
             return Ok(true);
         }
-
-        // todo: better lock deletion logic
-        let _: Result<(), _> = (self.redis_conn_manager.clone())
-            .del::<_, ()>(self.get_redis_lock_key())
-            .await;
 
         // did not update header
         Ok(false)
@@ -317,9 +341,10 @@ impl ProofService {
                 Some(state) => match state.status {
                     // state exists and proof generation has errored before. We start a proof cycle anew here
                     ProofRequestStatus::Errored => {
-                        let proof_status = self
+                        let proof_status: ProofRequestStatus = self
                             .create_new_request_entry(
                                 conn,
+                                finalized_header.beacon().slot,
                                 finalized_block_number,
                                 request,
                                 self.get_redis_key_proof(&proof_id),
@@ -335,6 +360,7 @@ impl ProofService {
                     let proof_status = self
                         .create_new_request_entry(
                             conn,
+                            finalized_header.beacon().slot,
                             finalized_block_number,
                             request,
                             self.get_redis_key_proof(&proof_id),
@@ -361,6 +387,7 @@ impl ProofService {
     async fn create_new_request_entry(
         &self,
         conn: &mut ConnectionManager,
+        latest_finalized_slot: u64,
         latest_finalized_block: u64,
         request: ProofRequest,
         redis_state_key: String,
@@ -368,7 +395,9 @@ impl ProofService {
     ) -> Result<ProofRequestStatus, ProofServiceError> {
         let mut proof_state = ProofRequestState::new(request.clone());
 
-        if latest_finalized_block >= request.block_number {
+        if latest_finalized_block >= request.block_number
+            && latest_finalized_slot > request.stored_contract_head
+        {
             // finality condition for request is already satisfied. Start proof generation right away
             // Change status to ::Generating
             proof_state.status = ProofRequestStatus::Generating;
@@ -396,8 +425,9 @@ impl ProofService {
     /// This function scans Redis for all keys with the configured prefix that store
     /// proof request states, deserializes them, and filters for those with
     /// WaitingForFinality status.
-    async fn get_proofs_waiting_for_finality(
+    async fn get_proof_requests_by_status(
         &self,
+        status: ProofRequestStatus,
     ) -> Result<Vec<ProofRequestState>, ProofServiceError> {
         let mut conn = self.redis_conn_manager.clone();
         let pattern = format!("{}:state:*", self.redis_key_prefix);
@@ -429,7 +459,7 @@ impl ProofService {
                 for (i, maybe_json) in state_jsons.into_iter().enumerate() {
                     if let Some(state_json) = maybe_json {
                         match serde_json::from_str::<ProofRequestState>(&state_json) {
-                            Ok(state) if state.status == ProofRequestStatus::WaitingForFinality => {
+                            Ok(state) if state.status == status => {
                                 waiting_proofs.push(state);
                             }
                             Ok(_) => {
@@ -455,41 +485,90 @@ impl ProofService {
         }
 
         debug!(
-            "Found {} proof requests waiting for finality",
-            waiting_proofs.len()
+            "Found {} proof requests with status {:?}",
+            waiting_proofs.len(),
+            status
         );
         Ok(waiting_proofs)
     }
 
+    // todo: This function should not put error into redis because we failed to construct the inputs to proof generation.
+    // todo: It should only fill error if the proof errored OR requesting the proof errored after a couple of retries.
+    // ! todo: this function cuts a lot of corners in terms of error handling currently.
+    // ! todo: maybe it's fine to have this function just return an error and end the tokio thread.
+    // ! todo: Then we'll pick up this change on next ::Generating pick up cycle ??
+    // ! todo: Idea: if proof input setup fails, just move it back to ::WaitingForFinality. Eh, this is not perfect, cause how will it be picked up much later?
+    // ! todo: I think I should try to set up inputs to the proof a couple of times. If unsuccessful, write Errored to redis, let client re-request.
     /// request proof generation from a ZKVM
     async fn generate_and_store_proof(
         request: ProofRequest,
         source_chain_provider: RootProvider<Http<Client>>,
-    ) -> anyhow::Result<()> {
-        // This function is limited to ONE instance per proof request per all possible machines
-        // AND the current status in Redis is ::Generating. This function has full control over
-        // this proof request entry and shouldn't need any locking
+    ) {
+        // At this point, this function is a single control flow pertaining to a specific proof request
+        // It can do any updates for this proof request entry with no redis lock held
+        // This function should not accidentally error and return without updating redis state, it should handle all errors
+
+        // todo: potentially, put a redis lock in here for a specific proof id. This is to show that current proof_id has
+        // todo: an associated function running. Otherwise, it's impossible to tell what to do with stale reqeuests with status ::Generating
 
         // Fetch the checkpoint at that slot
-        let checkpoint = get_checkpoint(request.valid_contract_head).await;
+        // todo: this can just unwrap and crash the API. We have to make versions of these fns that return errors ... Create lib2.rs or smth
+        let checkpoint = get_checkpoint(request.stored_contract_head).await;
 
-        // Get the client from the checkpoint
+        // Get the client from the checkpoint, will bootstrap a client with checkpoint
+        // todo: does this type of bootstrapping guarantee valid RPC output? I.e., will the client
+        // todo: have 100% correct data after this call?
         let client = get_client(checkpoint).await;
 
-        let mut stdin = SP1Stdin::new();
-
-        // Setup client.
-        let mut sync_committee_updates = get_updates(&client).await;
+        let sync_committee_updates = get_updates(&client).await;
         let finality_update: FinalityUpdate<MainnetConsensusSpec> =
             client.rpc.get_finality_update().await.unwrap();
 
         let latest_finalized_header = finality_update.finalized_header();
 
-        let latest_finalized_execution_header = latest_finalized_header
-            .execution()
-            .map_err(|_e| anyhow::anyhow!("Failed to get execution payload header"))?;
+        let expected_current_slot = client.expected_current_slot();
+        let latest_finalized_execution_header = latest_finalized_header.execution().unwrap();
 
-        Ok(())
+        let proof = source_chain_provider
+            .get_proof(request.hub_pool_address, vec![request.storage_slot])
+            .block_id((*latest_finalized_execution_header.block_number()).into())
+            .await
+            .unwrap();
+
+        let mut stdin = SP1Stdin::new();
+
+        let storage_slot = StorageSlot {
+            key: request.storage_slot,
+            expected_value: proof.storage_proof[0].value,
+            mpt_proof: proof.storage_proof[0].proof.clone(),
+        };
+
+        let inputs = ProofInputs {
+            sync_committee_updates,
+            finality_update,
+            expected_current_slot,
+            store: client.store.clone(),
+            genesis_root: client.config.chain.genesis_root,
+            forks: client.config.forks.clone(),
+            contract_storage_slots: ContractStorage {
+                address: proof.address,
+                expected_value: alloy_trie::TrieAccount {
+                    nonce: proof.nonce,
+                    balance: proof.balance,
+                    storage_root: proof.storage_hash,
+                    code_hash: proof.code_hash,
+                },
+                mpt_proof: proof.account_proof,
+                storage_slots: vec![storage_slot],
+            },
+        };
+        let encoded_proof_inputs = serde_cbor::to_vec(&inputs).unwrap();
+        stdin.write_slice(&encoded_proof_inputs);
+
+        // let zk_proof = self.client.prove(&self.pk, &stdin).groth16().run()?;
+
+        // info!("Attempting to update to new head block: {:?}", latest_slot);
+        // Ok(Some(proof))
     }
 
     async fn try_acquire_redis_lock(&self) -> Result<bool, ProofServiceError> {

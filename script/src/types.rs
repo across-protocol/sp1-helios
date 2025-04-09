@@ -1,3 +1,5 @@
+use std::fmt::Display;
+
 use crate::api::ProofRequest;
 use alloy_primitives::B256;
 use alloy_rlp::Encodable;
