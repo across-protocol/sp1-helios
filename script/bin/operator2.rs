@@ -18,7 +18,7 @@ async fn main() -> anyhow::Result<()> {
     let _api_task_handle = start_api_server(proof_service.clone()).await;
 
     loop {
-        if let Err(e) = ProofService::run_header_loop(proof_service.clone()).await {
+        if let Err(e) = ProofService::run(proof_service.clone()).await {
             error!("Error running proof service: {}", e);
         }
     }

@@ -15,13 +15,11 @@ use helios_consensus_core::{
 };
 use helios_ethereum::rpc::ConsensusRpc;
 use log::{debug, error, info, warn};
+use redis::{aio::ConnectionManager, AsyncCommands};
 use reqwest::{Client, Url};
 use sp1_sdk::SP1Stdin;
 use std::env;
-// Import Encodable for ProofRequest
-use redis::{aio::ConnectionManager, AsyncCommands};
-use std::{sync::Arc, time::Duration};
-use tokio::sync::Mutex;
+use std::time::Duration;
 
 /// Service responsible for managing the lifecycle of ZK proof generation requests.
 ///
@@ -35,9 +33,6 @@ pub struct ProofService {
     header_check_interval_secs: u64,
     // required for storage slot merkle proving
     source_chain_provider: RootProvider<Http<Client>>,
-    // todo: mb store latest_checkpoint here? E.g. attested_header + finalized_header
-    // todo: moving this to redis instead.
-    // latest_finalized_header: Arc<Mutex<LightClientHeader>>,
 }
 
 impl ProofService {
@@ -63,27 +58,22 @@ impl ProofService {
         let redis_key_prefix = env::var("REDIS_KEY_PREFIX")
             .expect("REDIS_KEY_PREFIX environment variable must be set");
 
-        // Read polling interval configuration
         let header_check_interval_secs: u64 = match env::var("FINALIZED_HEADER_CHECK_INTERVAL_SECS")
         {
             Ok(val) => match val.parse() {
                 Ok(num) if num > 0 => num,
                 Ok(_) => {
-                    warn!("FINALIZED_HEADER_CHECK_INTERVAL_SECS must be > 0, using default of 30");
-                    30
+                    panic!("FINALIZED_HEADER_CHECK_INTERVAL_SECS must be > 0");
                 }
                 Err(_) => {
-                    warn!("FINALIZED_HEADER_CHECK_INTERVAL_SECS not a valid number, using default of 30");
-                    30
+                    panic!("FINALIZED_HEADER_CHECK_INTERVAL_SECS not a valid number");
                 }
             },
             Err(_) => {
-                info!("FINALIZED_HEADER_CHECK_INTERVAL_SECS not set, using default of 30");
-                30
+                panic!("FINALIZED_HEADER_CHECK_INTERVAL_SECS not set");
             }
         };
 
-        // Log configuration
         info!("ProofService configuration:");
         info!(" - Redis URL: {}", redis_url);
         info!(" - Redis Lock Duration: {}s", redis_lock_duration_secs);
@@ -93,37 +83,6 @@ impl ProofService {
             header_check_interval_secs
         );
 
-        // Fetch the latest finalized header with retries
-        info!("Fetching latest finalized header...");
-
-        const MAX_RETRIES: usize = 3;
-        let mut retries = 0;
-        let latest_finality_update = loop {
-            match Self::get_latest_finality_update().await {
-                Ok(finality_update) => break finality_update,
-                Err(e) if retries < MAX_RETRIES => {
-                    retries += 1;
-                    warn!(
-                        "Failed to get latest finalized header (attempt {}/{}): {}",
-                        retries, MAX_RETRIES, e
-                    );
-                    tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
-                }
-                Err(e) => {
-                    return Err(anyhow!(
-                        "Failed to get latest finalized header after multiple attempts: {}",
-                        e
-                    ));
-                }
-            }
-        };
-
-        info!(
-            "Latest finalized header retrieved successfully (slot: {}).",
-            latest_finality_update.finalized_header().beacon().slot
-        );
-
-        // Initialize Redis connection
         let client =
             redis::Client::open(redis_url.as_str()).context("Failed to create Redis client")?;
 
@@ -134,11 +93,10 @@ impl ProofService {
         .await
         {
             Ok(Ok(conn)) => conn,
-            Ok(Err(e)) => return Err(anyhow!("Failed to connect to Redis: {}", e).into()),
-            Err(_) => return Err(anyhow!("Timed out connecting to Redis after 5 seconds").into()),
+            Ok(Err(e)) => return Err(anyhow!("Failed to connect to Redis: {}", e)),
+            Err(_) => return Err(anyhow!("Timed out connecting to Redis after 5 seconds")),
         };
 
-        // Create the service instance
         let service = Self {
             redis_conn_manager,
             redis_lock_duration: Duration::from_secs(redis_lock_duration_secs),
@@ -152,34 +110,51 @@ impl ProofService {
     }
 
     /// Run the proof service, periodically checking for new finalized headers
-    pub async fn run_header_loop(self) -> anyhow::Result<()> {
+    pub async fn run(self) -> anyhow::Result<()> {
         info!(
             "Starting finalized header polling loop with interval of {}s",
             self.header_check_interval_secs
         );
 
-        // Create the ticker for our polling interval
-        let mut ticker =
-            tokio::time::interval(Duration::from_secs(self.header_check_interval_secs));
-
-        // Run the polling loop
         loop {
-            // Wait for the next tick
-            ticker.tick().await;
-
             debug!("Checking for new finalized header...");
 
-            // Attempt to get the latest finalized header
             match Self::get_latest_finality_update().await {
                 Ok(finality_update) => {
-                    // todo: retry a couple of times here if we received an error
-                    self.try_update_finalized_header(finality_update).await;
+                    // Retry up to 3 times with 1 second interval
+                    let mut attempts = 0;
+                    let max_attempts = 3;
+
+                    while attempts < max_attempts {
+                        match self
+                            .try_update_finalized_header(finality_update.clone())
+                            .await
+                        {
+                            Ok(_) => break,
+                            Err(e) => {
+                                attempts += 1;
+
+                                if attempts >= max_attempts {
+                                    error!(
+                                        "Failed to update finalized header after {} attempts: {}",
+                                        max_attempts, e
+                                    );
+                                } else {
+                                    debug!("Attempt {}/{} to update finalized header failed, retrying in 1s", 
+                                           attempts, max_attempts);
+                                    tokio::time::sleep(Duration::from_secs(1)).await;
+                                }
+                            }
+                        }
+                    }
                 }
                 Err(e) => {
                     error!("Failed to fetch latest finalized header: {}", e);
-                    // Continue the loop, will try again at next interval
+                    // Continue the loop, will try again after sleeping
                 }
             }
+
+            tokio::time::sleep(Duration::from_secs(self.header_check_interval_secs)).await;
         }
     }
 
@@ -188,7 +163,6 @@ impl ProofService {
         new_finality_update: FinalityUpdate<MainnetConsensusSpec>,
     ) -> Result<bool, ProofServiceError> {
         let acquired = self.try_acquire_redis_lock().await?;
-        // TODO: delete lock via some defer `let _: Result<(), _> = conn.del::<_, ()>(&redis_lock_key).await;`
         if !acquired {
             // Should be a pretty rare occurence, so it's fine to just return error here and let the caller try again
             return Err(ProofServiceError::Internal(
@@ -196,8 +170,26 @@ impl ProofService {
             ));
         }
 
+        let result = self
+            .try_update_finalized_header_inner(new_finality_update)
+            .await;
+
+        // best effort to delete the lock
+        let _: Result<(), _> = (self.redis_conn_manager.clone())
+            .del::<_, ()>(self.get_redis_lock_key())
+            .await;
+
+        result
+    }
+
+    /// This function assumes redis lock is held
+    async fn try_update_finalized_header_inner(
+        &self,
+        new_finality_update: FinalityUpdate<MainnetConsensusSpec>,
+    ) -> Result<bool, ProofServiceError> {
         let finalized_header = self.get_finalized_header().await?;
-        // ! TODO: check that finality_update is consistent with values stored in our current light client, e.g. check that it has valid signature and transition
+        // todo: here, we're trusting that our light client object already checked this update for
+        // validity, so we don't perform any validity checks here. Is this correct?
         let should_update_header: bool = match finalized_header {
             Some(header) => {
                 header.beacon().slot < new_finality_update.finalized_header().beacon().slot
@@ -286,6 +278,7 @@ impl ProofService {
         let _: Result<(), _> = (self.redis_conn_manager.clone())
             .del::<_, ()>(self.get_redis_lock_key())
             .await;
+
         // did not update header
         Ok(false)
     }
@@ -563,18 +556,18 @@ impl ProofService {
         format!("{}:lock", self.redis_key_prefix)
     }
 
+    // ! todo: I think, in this function, I should do something like:
+    // ! 1. have light_client: Inner<MainnetConsensusSpec, HttpRpc> as a member var of ProofService
+    // ! 2. fetch all the finality updates since my client's latest recorded data in client.store.
+    // ! 3. verify and apply all updates consecutively. In the code above, work with client.store values, rather than querying anything from RPC.
     /// Fetches the latest finalized LightClientHeader for use with ProofService
     async fn get_latest_finality_update() -> anyhow::Result<FinalityUpdate<MainnetConsensusSpec>> {
         // TODO: just use bootstrap slot from .env or something else ... IDK yet
         // Yeah, maybe some recent finalized slot?
+        // get_latest_checkpoint seems to be returning rather old data
         let checkpoint = get_latest_checkpoint().await;
-
-        // Create a client from the checkpoint
         let client = get_client(checkpoint).await;
 
-        // !!! TODO: is finality update dependent on the checkpoint??? Test with different checkpoints
-        // It might not. The light client just needs some checkpoint to start from
-        // Get the finality update
         client
             .rpc
             .get_finality_update()

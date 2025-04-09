@@ -74,9 +74,6 @@ pub fn main() {
     // what if finality_update is default?
     apply_finality_update(&mut store, &finality_update);
 
-    let hh = finality_update.finalized_header();
-    let beacon_body_root = finality_update.finalized_header().beacon().body_root;
-
     // 3. Verify storage slot proofs
     let execution_state_root = *store
         .finalized_header
