@@ -101,23 +101,6 @@ impl ProofService {
 
     /// Run the proof service, periodically checking for new finalized headers
     pub async fn run(self) -> anyhow::Result<()> {
-        // {
-        //     // test
-        //     let key = "sp1_helios_proofs:state:338d7e2274539bb1bc96f9988de4810d62abd748686c74d840510696d8483b6d";
-        //     let conn = &mut self.redis_conn_manager.clone();
-        //     let state = Self::get_value_from_redis::<ProofRequestState>(conn, &key.to_string())
-        //         .await?
-        //         .unwrap();
-        //     let proof_data = state.proof_data.unwrap();
-        //     info!(
-        //         "proof: {} , public_values: {} , from_head: {}",
-        //         hex::encode(proof_data.proof),
-        //         hex::encode(proof_data.public_values),
-        //         proof_data.from_head
-        //     );
-        //     return Ok(());
-        // }
-
         // todo: we might want to get checkpoint from .env to be 100% sure it's genuine
         let checkpoint = get_latest_checkpoint().await;
         info!(
@@ -581,8 +564,8 @@ impl ProofService {
                 let mut proof_state = ProofRequestState::new(request.clone());
                 proof_state.status = ProofRequestStatus::Success;
                 proof_state.proof_data = Some(ProofData {
-                    proof: proof.bytes(),
-                    public_values: proof.public_values.to_vec(),
+                    proof: hex::encode(proof.bytes()),
+                    public_values: hex::encode(proof.public_values.to_vec()),
                     // todo: will remove `from_head` once we update the contracts
                     from_head: request.stored_contract_head,
                 });
@@ -674,4 +657,20 @@ impl ProofService {
     fn get_redis_lock_key(&self) -> String {
         format!("{}:lock", self.redis_key_prefix)
     }
+}
+
+#[allow(dead_code)]
+async fn get_human_readable_proof_state(
+    conn: &mut ConnectionManager,
+    key: &str,
+) -> anyhow::Result<()> {
+    let state = ProofService::get_value_from_redis::<ProofRequestState>(conn, &key.to_string())
+        .await?
+        .unwrap();
+    let proof_data = state.proof_data.unwrap();
+    info!(
+        "proof: {} , public_values: {} , from_head: {}",
+        proof_data.proof, proof_data.public_values, proof_data.from_head
+    );
+    Ok(())
 }

@@ -24,11 +24,8 @@ use utoipa_swagger_ui::SwaggerUi;
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum ProofStatusResponse {
-    /// Proof generation is in progress
     Pending,
-    /// Proof generation was successful
     Success,
-    /// Proof generation encountered an error
     Errored,
 }
 
@@ -139,7 +136,7 @@ impl IntoResponse for ProofServiceError {
                 error!("Redis error: {}", e);
                 (
                     StatusCode::INTERNAL_SERVER_ERROR,
-                    "Internal server error".to_string(),
+                    format!("Redis error: {}", e),
                 )
             }
             ProofServiceError::LockContention(id) => (
@@ -157,7 +154,7 @@ impl IntoResponse for ProofServiceError {
                 error!("Serialization error: {}", e);
                 (
                     StatusCode::INTERNAL_SERVER_ERROR,
-                    "Internal server error".to_string(),
+                    format!("Serialization error: {}", e),
                 )
             }
             ProofServiceError::ProofGenerationFailed(id, msg) => {
@@ -170,29 +167,19 @@ impl IntoResponse for ProofServiceError {
                 );
                 (
                     StatusCode::INTERNAL_SERVER_ERROR,
-                    "Proof generation failed".to_string(),
+                    format!("Proof generation failed: {}", msg),
                 )
             }
             ProofServiceError::Internal(msg) => {
                 error!("Internal service error: {}", msg);
                 (
                     StatusCode::INTERNAL_SERVER_ERROR,
-                    "Internal server error".to_string(),
+                    format!("Internal error: {}", msg),
                 )
             }
         };
         (status, Json(serde_json::json!({ "error": error_message }))).into_response()
     }
-}
-
-/// Create and configure the API router
-fn create_api_router(proof_service: ProofService) -> Router {
-    Router::new()
-        .route("/health", get(health_handler))
-        .route("/api/proofs", post(request_proof_handler))
-        .route("/api/proofs/{id}", get(get_proof_handler))
-        .merge(SwaggerUi::new("/swagger-ui").url("/api-docs/openapi.json", ApiDoc::openapi()))
-        .with_state(proof_service)
 }
 
 /// Health check endpoint
@@ -273,6 +260,16 @@ async fn get_proof_handler(
     };
 
     Ok((StatusCode::OK, Json(response_state)))
+}
+
+/// Create and configure the API router
+fn create_api_router(proof_service: ProofService) -> Router {
+    Router::new()
+        .route("/health", get(health_handler))
+        .route("/api/proofs", post(request_proof_handler))
+        .route("/api/proofs/{id}", get(get_proof_handler))
+        .merge(SwaggerUi::new("/swagger-ui").url("/api-docs/openapi.json", ApiDoc::openapi()))
+        .with_state(proof_service)
 }
 
 /// Start the API server

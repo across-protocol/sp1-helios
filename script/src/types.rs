@@ -7,14 +7,13 @@ use thiserror::Error;
 use utoipa::ToSchema;
 
 /// Unique identifier for a proof request, derived from the Keccak256 hash of its RLP-encoded content.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)] // B256 derives these traits
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct ProofId(B256);
 
 impl ProofId {
     /// Creates a new ProofId by RLP encoding the ProofRequest and hashing it with Keccak256.
     pub fn new(request: &ProofRequest) -> Self {
         let mut buf = Vec::new();
-        // ProofRequest needs RlpEncodable from api.rs
         request.encode(&mut buf);
         ProofId(alloy_primitives::keccak256(&buf))
     }
@@ -30,7 +29,6 @@ impl ProofId {
     }
 }
 
-// Implement From<B256> for ProofId
 impl From<B256> for ProofId {
     fn from(hash: B256) -> Self {
         ProofId(hash)
@@ -86,10 +84,11 @@ impl ProofRequestState {
 /// Data needed to call `SP1Helios.update`
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct ProofData {
-    /// ZK proof bytes to pass to the update function
-    pub proof: Vec<u8>,
-    /// Public values bytes to pass to the update function. Encoded `ProofOutputs`
-    pub public_values: Vec<u8>,
+    /// Hex string of ZK proof bytes to pass to the update function
+    pub proof: String,
+    /// Hex string of public values bytes to pass to the update function. Encoded `ProofOutputs`
+    pub public_values: String,
+    // todo: to be removed once we update the contracts
     /// Beacon slot to pass to the update function
     pub from_head: u64,
 }
@@ -104,7 +103,7 @@ pub enum ProofServiceError {
     #[error("Proof request not found: {0:?}")]
     NotFound(ProofId),
     #[error("Failed to serialize/deserialize state: {0}")]
-    SerializationError(#[from] serde_json::Error), // Added variant for serde_json errors
+    SerializationError(#[from] serde_json::Error),
     #[error("Proof generation failed for ID {0:?}: {1}")]
     ProofGenerationFailed(ProofId, String),
     #[error("Internal service error: {0}")]
