@@ -1,5 +1,3 @@
-use std::fmt::Display;
-
 use crate::api::ProofRequest;
 use alloy_primitives::B256;
 use alloy_rlp::Encodable;
@@ -93,7 +91,7 @@ pub struct ProofData {
     /// Public values bytes to pass to the update function. Encoded `ProofOutputs`
     pub public_values: Vec<u8>,
     /// Beacon slot to pass to the update function
-    pub head: u64,
+    pub from_head: u64,
 }
 
 /// Errors that can occur within the ProofService.

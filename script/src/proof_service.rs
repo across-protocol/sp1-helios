@@ -1,34 +1,30 @@
 use crate::{
     api::ProofRequest,
-    create_streaming_client, get_checkpoint, get_client, get_latest_checkpoint, get_updates,
-    types::{ProofId, ProofRequestState, ProofRequestStatus, ProofServiceError},
+    get_checkpoint, get_client, get_latest_checkpoint, get_updates,
+    types::{ProofData, ProofId, ProofRequestState, ProofRequestStatus, ProofServiceError},
 };
 use alloy::{
-    consensus::BlockHeader,
     network::Ethereum,
     providers::{Provider, ProviderBuilder, RootProvider},
     transports::http::Http,
 };
+use alloy_primitives::hex;
 use anyhow::{anyhow, Context, Result};
 use helios_consensus_core::{
     consensus_spec::MainnetConsensusSpec,
     types::{FinalityUpdate, LightClientHeader},
 };
-use helios_ethereum::{
-    config::Config,
-    rpc::{http_rpc::HttpRpc, ConsensusRpc},
-};
-use log::{debug, error, info, warn};
+use helios_ethereum::rpc::ConsensusRpc;
+use log::{debug, info, warn};
 use redis::{aio::ConnectionManager, AsyncCommands};
 use reqwest::{Client, Url};
 use sp1_helios_primitives::types::{ContractStorage, ProofInputs, StorageSlot};
 use sp1_sdk::SP1Stdin;
 use std::time::Duration;
 use std::{env, sync::Arc};
-use tokio::{
-    select,
-    time::{interval_at, Instant},
-};
+use tokio::time::{interval_at, Instant};
+
+const ELF: &[u8] = include_bytes!("../../elf/sp1-helios-elf");
 
 /// Service responsible for managing the lifecycle of ZK proof generation requests.
 ///
@@ -36,10 +32,11 @@ use tokio::{
 /// external asynchronous function to trigger the actual proof computation.
 #[derive(Clone)]
 pub struct ProofService {
+    prover_client: Arc<sp1_sdk::EnvProver>,
+    proving_key: sp1_sdk::SP1ProvingKey,
     redis_lock_duration: Duration,
     redis_key_prefix: String,
     redis_conn_manager: ConnectionManager,
-    header_check_interval_secs: u64,
     // required for storage slot merkle proving
     source_chain_provider: RootProvider<Http<Client>>,
 }
@@ -67,30 +64,10 @@ impl ProofService {
         let redis_key_prefix = env::var("REDIS_KEY_PREFIX")
             .expect("REDIS_KEY_PREFIX environment variable must be set");
 
-        let header_check_interval_secs: u64 = match env::var("FINALIZED_HEADER_CHECK_INTERVAL_SECS")
-        {
-            Ok(val) => match val.parse() {
-                Ok(num) if num > 0 => num,
-                Ok(_) => {
-                    panic!("FINALIZED_HEADER_CHECK_INTERVAL_SECS must be > 0");
-                }
-                Err(_) => {
-                    panic!("FINALIZED_HEADER_CHECK_INTERVAL_SECS not a valid number");
-                }
-            },
-            Err(_) => {
-                panic!("FINALIZED_HEADER_CHECK_INTERVAL_SECS not set");
-            }
-        };
-
         info!("ProofService configuration:");
         info!(" - Redis URL: {}", redis_url);
         info!(" - Redis Lock Duration: {}s", redis_lock_duration_secs);
         info!(" - Redis Key Prefix: {}", redis_key_prefix);
-        info!(
-            " - Finalized Header Check Interval: {}s",
-            header_check_interval_secs
-        );
 
         let client =
             redis::Client::open(redis_url.as_str()).context("Failed to create Redis client")?;
@@ -106,11 +83,15 @@ impl ProofService {
             Err(_) => return Err(anyhow!("Timed out connecting to Redis after 5 seconds")),
         };
 
+        let prover_client = sp1_sdk::ProverClient::from_env();
+        let (proving_key, _) = prover_client.setup(ELF);
+
         let service = Self {
+            prover_client: Arc::new(prover_client),
+            proving_key,
             redis_conn_manager,
             redis_lock_duration: Duration::from_secs(redis_lock_duration_secs),
             redis_key_prefix,
-            header_check_interval_secs,
             source_chain_provider,
         };
 
@@ -120,6 +101,23 @@ impl ProofService {
 
     /// Run the proof service, periodically checking for new finalized headers
     pub async fn run(self) -> anyhow::Result<()> {
+        // {
+        //     // test
+        //     let key = "sp1_helios_proofs:state:338d7e2274539bb1bc96f9988de4810d62abd748686c74d840510696d8483b6d";
+        //     let conn = &mut self.redis_conn_manager.clone();
+        //     let state = Self::get_value_from_redis::<ProofRequestState>(conn, &key.to_string())
+        //         .await?
+        //         .unwrap();
+        //     let proof_data = state.proof_data.unwrap();
+        //     info!(
+        //         "proof: {} , public_values: {} , from_head: {}",
+        //         hex::encode(proof_data.proof),
+        //         hex::encode(proof_data.public_values),
+        //         proof_data.from_head
+        //     );
+        //     return Ok(());
+        // }
+
         // todo: we might want to get checkpoint from .env to be 100% sure it's genuine
         let checkpoint = get_latest_checkpoint().await;
         info!(
@@ -272,14 +270,13 @@ impl ProofService {
                     // Update status to Generating
                     let mut updated_state = proof_state.clone();
 
-                    // TODO: Think about concurrency and fault-tolerance around this ::Generating thing. If we set redis key
-                    // to generating and the server immediately crashes, what should we do? We should somehow know which tasks
-                    // we currenly have in the system, and for each task that should be processing but is not, we should start
-                    // processing it. Should have Some Self { Vec<Task> }. Task will have some metadata and an associated joinHandle.
-                    // Then for every Request that has status ::Generating, we should have a task. Otherwise, spin up new task.
-                    // However, what if there's another instance of ProofService doing that? We could have some sort of per-task redis lock
-                    // that should be renewed by an active task that is handling ::Generating tasks logic. Then, we'd try to start a tokio thread
-                    // for each task that has a status ::Generating and for the ones that are locked, we'd just back off.
+                    /*
+                    TODO:
+                    If we proof status in redis to ::Generating and the service crashes after, there would be no active worker on that task.
+                    Solvable by creating keys with expiry which would be kept up-to-date by the tread that's responsible for the task. A
+                    second component to this is a periodic check on ::Generating tasks. If any of them have lock unset -- we should launch
+                    a new task to handle that request
+                     */
                     updated_state.status = ProofRequestStatus::Generating;
 
                     let redis_key = self.get_redis_key_proof(&ProofId::new(&proof_state.request));
@@ -294,9 +291,9 @@ impl ProofService {
 
             // Now that the transaction has completed successfully, spawn tasks to generate proofs
             for request in requests_to_process {
-                let source_chain_provider = self.source_chain_provider.clone();
+                let proof_service = self.clone();
                 tokio::spawn(async move {
-                    let _ = Self::generate_and_store_proof(request, source_chain_provider).await;
+                    Self::generate_and_store_proof(request, proof_service).await;
                 });
             }
 
@@ -404,9 +401,9 @@ impl ProofService {
             conn.set::<_, _, ()>(&redis_state_key, serde_json::to_string(&proof_state)?)
                 .await?;
 
-            let source_chain_provider = self.source_chain_provider.clone();
+            let proof_service = self.clone();
             tokio::spawn(async move {
-                let _ = Self::generate_and_store_proof(request, source_chain_provider).await;
+                Self::generate_and_store_proof(request, proof_service).await;
             });
         } else {
             proof_state.status = ProofRequestStatus::WaitingForFinality;
@@ -500,10 +497,7 @@ impl ProofService {
     // ! todo: Idea: if proof input setup fails, just move it back to ::WaitingForFinality. Eh, this is not perfect, cause how will it be picked up much later?
     // ! todo: I think I should try to set up inputs to the proof a couple of times. If unsuccessful, write Errored to redis, let client re-request.
     /// request proof generation from a ZKVM
-    async fn generate_and_store_proof(
-        request: ProofRequest,
-        source_chain_provider: RootProvider<Http<Client>>,
-    ) {
+    async fn generate_and_store_proof(request: ProofRequest, mut proof_service: ProofService) {
         // At this point, this function is a single control flow pertaining to a specific proof request
         // It can do any updates for this proof request entry with no redis lock held
         // This function should not accidentally error and return without updating redis state, it should handle all errors
@@ -529,7 +523,8 @@ impl ProofService {
         let expected_current_slot = client.expected_current_slot();
         let latest_finalized_execution_header = latest_finalized_header.execution().unwrap();
 
-        let proof = source_chain_provider
+        let proof = proof_service
+            .source_chain_provider
             .get_proof(request.hub_pool_address, vec![request.storage_slot])
             .block_id((*latest_finalized_execution_header.block_number()).into())
             .await
@@ -565,10 +560,55 @@ impl ProofService {
         let encoded_proof_inputs = serde_cbor::to_vec(&inputs).unwrap();
         stdin.write_slice(&encoded_proof_inputs);
 
-        // let zk_proof = self.client.prove(&self.pk, &stdin).groth16().run()?;
+        // todo: by default, there's some proof validity simulation happening before sending the request to the network
+        // todo: by setting some flag, like .skip_simulation to false, we can omit that, but it's actually nice that this safety check is happening
+        let zk_proof = proof_service
+            .prover_client
+            .prove(&proof_service.proving_key, &stdin)
+            .groth16()
+            .run();
 
-        // info!("Attempting to update to new head block: {:?}", latest_slot);
-        // Ok(Some(proof))
+        let proof_id = ProofId::new(&request);
+        let redis_state_key = proof_service.get_redis_key_proof(&proof_id);
+        let proof_state = match zk_proof {
+            Ok(proof) => {
+                info!(
+                    target: "proof_service::generate_and_store_proof",
+                    "Storing successfully generated proof in redis! Id: {:?} , Key: {} , Proof: {:?}",
+                    proof_id, redis_state_key, proof.bytes()
+                );
+
+                let mut proof_state = ProofRequestState::new(request.clone());
+                proof_state.status = ProofRequestStatus::Success;
+                proof_state.proof_data = Some(ProofData {
+                    proof: proof.bytes(),
+                    public_values: proof.public_values.to_vec(),
+                    // todo: will remove `from_head` once we update the contracts
+                    from_head: request.stored_contract_head,
+                });
+                proof_state
+            }
+            Err(e) => {
+                warn!(
+                    target: "proof_service::generate_and_store_proof",
+                    "Error generating proof for id {:?} . Error: {}",
+                    proof_id, e.to_string()
+                );
+
+                let mut proof_state = ProofRequestState::new(request.clone());
+                proof_state.status = ProofRequestStatus::Errored;
+                proof_state.error_message = Some(e.to_string());
+                proof_state
+            }
+        };
+
+        let conn = &mut proof_service.redis_conn_manager;
+        conn.set::<_, _, ()>(
+            &redis_state_key,
+            serde_json::to_string(&proof_state).unwrap(),
+        )
+        .await
+        .unwrap();
     }
 
     async fn try_acquire_redis_lock(&self) -> Result<bool, ProofServiceError> {
@@ -633,24 +673,5 @@ impl ProofService {
     /// Generates a global redis lock for ProofService prefix.
     fn get_redis_lock_key(&self) -> String {
         format!("{}:lock", self.redis_key_prefix)
-    }
-
-    // ! todo: I think, in this function, I should do something like:
-    // ! 1. have light_client: Inner<MainnetConsensusSpec, HttpRpc> as a member var of ProofService
-    // ! 2. fetch all the finality updates since my client's latest recorded data in client.store.
-    // ! 3. verify and apply all updates consecutively. In the code above, work with client.store values, rather than querying anything from RPC.
-    /// Fetches the latest finalized LightClientHeader for use with ProofService
-    async fn get_latest_finality_update() -> anyhow::Result<FinalityUpdate<MainnetConsensusSpec>> {
-        // TODO: just use bootstrap slot from .env or something else ... IDK yet
-        // Yeah, maybe some recent finalized slot?
-        // get_latest_checkpoint seems to be returning rather old data
-        let checkpoint = get_latest_checkpoint().await;
-        let client = get_client(checkpoint).await;
-
-        client
-            .rpc
-            .get_finality_update()
-            .await
-            .map_err(|e| anyhow!("get_latest_finality_update error: {}", e))
     }
 }
