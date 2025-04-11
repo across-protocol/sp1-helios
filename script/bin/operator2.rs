@@ -17,6 +17,7 @@ async fn main() -> anyhow::Result<()> {
     // Arc<Mutex<>> which is fine to share via a clone
     let _api_task_handle = start_api_server(proof_service.clone()).await;
 
+    // We have no state that can break inside `proof_service`, so might as well re-run on any error
     loop {
         if let Err(e) = ProofService::run(proof_service.clone()).await {
             error!("Error running proof service: {}", e);

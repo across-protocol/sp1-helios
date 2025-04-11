@@ -209,7 +209,7 @@ async fn health_handler() -> &'static str {
     )
 )]
 async fn request_proof_handler(
-    State(service): State<ProofService>,
+    State(mut service): State<ProofService>,
     Json(api_request): Json<ApiProofRequest>,
 ) -> Result<impl IntoResponse, ProofServiceError> {
     let request = ProofRequest::try_from(api_request)?;
@@ -247,7 +247,7 @@ async fn get_proof_handler(
     })?;
     let proof_id: ProofId = proof_id_bytes.into();
 
-    let stored_state = match service.get_proof_request_state(&proof_id).await? {
+    let stored_state = match service.get_proof(&proof_id).await? {
         Some(state) => state,
         None => return Err(ProofServiceError::NotFound(proof_id)),
     };

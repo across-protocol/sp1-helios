@@ -25,6 +25,13 @@ pub const MAX_REQUEST_LIGHT_CLIENT_UPDATES: u8 = 128;
 pub async fn get_updates(
     client: &Inner<MainnetConsensusSpec, HttpRpc>,
 ) -> Vec<Update<MainnetConsensusSpec>> {
+    try_get_updates(client).await.unwrap()
+}
+
+/// Fetch updates for client
+pub async fn try_get_updates(
+    client: &Inner<MainnetConsensusSpec, HttpRpc>,
+) -> anyhow::Result<Vec<Update<MainnetConsensusSpec>>> {
     let period =
         calc_sync_period::<MainnetConsensusSpec>(client.store.finalized_header.beacon().slot);
 
@@ -32,9 +39,9 @@ pub async fn get_updates(
         .rpc
         .get_updates(period, MAX_REQUEST_LIGHT_CLIENT_UPDATES)
         .await
-        .unwrap();
+        .map_err(|e| anyhow::anyhow!("{}", e))?;
 
-    updates.clone()
+    Ok(updates)
 }
 
 /// Fetch latest checkpoint from chain to bootstrap client to the latest state.
@@ -52,9 +59,21 @@ pub async fn get_latest_checkpoint() -> B256 {
 
 /// Fetch checkpoint from a slot number.
 pub async fn get_checkpoint(slot: u64) -> B256 {
-    let consensus_rpc = std::env::var("SOURCE_CONSENSUS_RPC_URL").unwrap();
-    let chain_id = std::env::var("SOURCE_CHAIN_ID").unwrap();
-    let network = Network::from_chain_id(chain_id.parse().unwrap()).unwrap();
+    try_get_checkpoint(slot).await.unwrap()
+}
+
+/// Fetch checkpoint from a slot number. But error instead of crashing
+pub async fn try_get_checkpoint(slot: u64) -> anyhow::Result<B256> {
+    let consensus_rpc = std::env::var("SOURCE_CONSENSUS_RPC_URL")
+        .map_err(|e| anyhow::anyhow!("SOURCE_CONSENSUS_RPC_URL not set: {}", e))?;
+    let chain_id = std::env::var("SOURCE_CHAIN_ID")
+        .map_err(|e| anyhow::anyhow!("SOURCE_CHAIN_ID not set: {}", e))?;
+    let network = Network::from_chain_id(
+        chain_id
+            .parse()
+            .map_err(|e| anyhow::anyhow!("Invalid SOURCE_CHAIN_ID: {}", e))?,
+    )
+    .map_err(|e| anyhow::anyhow!("Unknown network for chain ID: {} . Error: {}", chain_id, e))?;
     let base_config = network.to_base_config();
 
     let config = Config {
@@ -77,16 +96,34 @@ pub async fn get_checkpoint(slot: u64) -> B256 {
         Arc::new(config),
     );
 
-    let block: BeaconBlock<MainnetConsensusSpec> = client.rpc.get_block(slot).await.unwrap();
+    let block: BeaconBlock<MainnetConsensusSpec> = client
+        .rpc
+        .get_block(slot)
+        .await
+        .map_err(|e| anyhow::anyhow!("{}", e))?;
 
-    B256::from_slice(block.tree_hash_root().as_ref())
+    Ok(B256::from_slice(block.tree_hash_root().as_ref()))
 }
 
 /// Setup a client from a checkpoint.
 pub async fn get_client(checkpoint: B256) -> Inner<MainnetConsensusSpec, HttpRpc> {
-    let consensus_rpc = std::env::var("SOURCE_CONSENSUS_RPC_URL").unwrap();
-    let chain_id = std::env::var("SOURCE_CHAIN_ID").unwrap();
-    let network = Network::from_chain_id(chain_id.parse().unwrap()).unwrap();
+    try_get_client(checkpoint).await.unwrap()
+}
+
+/// Setup a client from a checkpoint.
+pub async fn try_get_client(
+    checkpoint: B256,
+) -> anyhow::Result<Inner<MainnetConsensusSpec, HttpRpc>> {
+    let consensus_rpc = std::env::var("SOURCE_CONSENSUS_RPC_URL")
+        .map_err(|e| anyhow::anyhow!("Failed to get SOURCE_CONSENSUS_RPC_URL: {}", e))?;
+    let chain_id = std::env::var("SOURCE_CHAIN_ID")
+        .map_err(|e| anyhow::anyhow!("Failed to get SOURCE_CHAIN_ID: {}", e))?;
+    let network = Network::from_chain_id(
+        chain_id
+            .parse()
+            .map_err(|e| anyhow::anyhow!("Failed to parse chain_id: {}", e))?,
+    )
+    .map_err(|_| anyhow::anyhow!("Failed to get network from chain_id: {}", chain_id))?;
     let base_config = network.to_base_config();
 
     let config = Config {
@@ -110,8 +147,12 @@ pub async fn get_client(checkpoint: B256) -> Inner<MainnetConsensusSpec, HttpRpc
         Arc::new(config),
     );
 
-    client.bootstrap(checkpoint).await.unwrap();
     client
+        .bootstrap(checkpoint)
+        .await
+        .map_err(|e| anyhow::anyhow!("Failed to bootstrap client with checkpoint: {}", e))?;
+
+    Ok(client)
 }
 
 /// Creates a ConsensusClient that performs auto-updates every 12 seconds. Does all the required
