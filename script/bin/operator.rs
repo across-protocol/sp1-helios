@@ -235,6 +235,9 @@ impl SP1HeliosOperator {
             mpt_proof: proof.storage_proof[0].proof.clone(),
         };
 
+        // Get the latest finalized slot number for user confirmation
+        let latest_finalized_slot = latest_finalized_header.beacon().slot;
+
         let inputs = ProofInputs {
             sync_committee_updates,
             finality_update,
@@ -256,6 +259,28 @@ impl SP1HeliosOperator {
         };
         let encoded_proof_inputs = serde_cbor::to_vec(&inputs)?;
         stdin.write_slice(&encoded_proof_inputs);
+
+        // Ask for user confirmation before proceeding
+        println!(
+            "Generating proof for finalized header: {}",
+            latest_finalized_slot
+        );
+        println!("Do you want to continue? [y/N]");
+
+        // Read user input
+        let mut input = String::new();
+        std::io::stdin()
+            .read_line(&mut input)
+            .expect("Failed to read input");
+
+        // Check if user wants to continue
+        let input = input.trim().to_lowercase();
+        if input != "y" && input != "yes" {
+            println!("Operation cancelled by user.");
+            return Ok(None);
+        }
+
+        println!("Continuing with proof generation...");
 
         // Generate proof.
         let proof = self.client.prove(&self.pk, &stdin).groth16().run()?;

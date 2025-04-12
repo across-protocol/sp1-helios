@@ -18,6 +18,7 @@ use tree_hash::TreeHash;
 pub mod api;
 pub mod proof_service;
 pub mod types;
+pub mod util;
 
 pub const MAX_REQUEST_LIGHT_CLIENT_UPDATES: u8 = 128;
 
@@ -45,16 +46,31 @@ pub async fn try_get_updates(
 }
 
 /// Fetch latest checkpoint from chain to bootstrap client to the latest state.
+/// Panics if any step fails.
 pub async fn get_latest_checkpoint() -> B256 {
+    try_get_latest_checkpoint().await.unwrap()
+}
+
+/// Fetch latest checkpoint from chain to bootstrap client to the latest state.
+/// Returns an error if any step fails.
+pub async fn try_get_latest_checkpoint() -> anyhow::Result<B256> {
     let cf = checkpoints::CheckpointFallback::new()
         .build()
         .await
-        .unwrap();
+        .map_err(|e| anyhow::anyhow!("Failed to build checkpoint fallback: {}", e))?;
 
-    let chain_id = std::env::var("SOURCE_CHAIN_ID").expect("SOURCE_CHAIN_ID not set");
-    let network = Network::from_chain_id(chain_id.parse().unwrap()).unwrap();
+    let chain_id =
+        std::env::var("SOURCE_CHAIN_ID").map_err(|_| anyhow::anyhow!("SOURCE_CHAIN_ID not set"))?;
+    let network = Network::from_chain_id(
+        chain_id
+            .parse()
+            .map_err(|e| anyhow::anyhow!("Invalid SOURCE_CHAIN_ID: {}", e))?,
+    )
+    .map_err(|e| anyhow::anyhow!("Unknown network for chain ID: {}", e))?;
 
-    cf.fetch_latest_checkpoint(&network).await.unwrap()
+    cf.fetch_latest_checkpoint(&network)
+        .await
+        .map_err(|e| anyhow::anyhow!("Failed to fetch latest checkpoint: {}", e))
 }
 
 /// Fetch checkpoint from a slot number.

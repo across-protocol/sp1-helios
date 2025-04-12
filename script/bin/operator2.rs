@@ -12,12 +12,15 @@ async fn main() -> anyhow::Result<()> {
 
     let proof_service = ProofService::new().await?;
 
-    // Start API server with a clone of the proof service. Notice that cloning is fine here
-    // becauer ProofService object is mostly stateless. The only state it has is under an
-    // Arc<Mutex<>> which is fine to share via a clone
+    // proof_service is a wrapper around DB connection + external zk proof generation service.
+    // It's stateless in this way, so it's fine to clone. Redis handles all state
     let _api_task_handle = start_api_server(proof_service.clone()).await;
 
-    // We have no state that can break inside `proof_service`, so might as well re-run on any error
+    /*
+    todo:
+    we might want to remove this loop and just let the program crash. How to handle all lingering green threads?
+    Maybe they're not a problem. They contain self-contained logic that will run it's course
+     */
     loop {
         if let Err(e) = ProofService::run(proof_service.clone()).await {
             error!("Error running proof service: {}", e);

@@ -1,7 +1,8 @@
 use crate::{
     api::ProofRequest,
-    get_client, get_latest_checkpoint, try_get_checkpoint, try_get_client, try_get_updates,
+    try_get_checkpoint, try_get_client, try_get_latest_checkpoint, try_get_updates,
     types::{ProofData, ProofId, ProofRequestState, ProofRequestStatus, ProofServiceError},
+    util::CancellationTokenGuard,
 };
 use alloy::{
     network::Ethereum,
@@ -26,8 +27,10 @@ use sp1_sdk::SP1Stdin;
 use std::time::Duration;
 use std::{env, sync::Arc};
 use tokio::time::{interval_at, Instant};
+use tokio_util::sync::CancellationToken;
 
 const ELF: &[u8] = include_bytes!("../../elf/sp1-helios-elf");
+const ORPHANED_PROOF_LOCK_ACQUIRE_DURATION_MS: u64 = 1000;
 
 /// Service responsible for managing the lifecycle of ZK proof generation requests.
 ///
@@ -97,7 +100,7 @@ impl ProofService {
                     // state exists and proof generation has errored before. We start a proof cycle anew here
                     ProofRequestStatus::Errored => {
                         let proof_status = self
-                            .create_new_request_entry(
+                            .create_new_request_entry_locked(
                                 finalized_header.beacon().slot,
                                 finalized_block_number,
                                 request,
@@ -111,7 +114,7 @@ impl ProofService {
                 },
                 None => {
                     let proof_status = self
-                        .create_new_request_entry(
+                        .create_new_request_entry_locked(
                             finalized_header.beacon().slot,
                             finalized_block_number,
                             request,
@@ -135,7 +138,7 @@ impl ProofService {
 
     /// This function assumes that the corresponding `redis_lock_key` is set for the duration.
     /// Called after checking the proper conditions for starting a proof generation sequence.
-    async fn create_new_request_entry(
+    async fn create_new_request_entry_locked(
         &mut self,
         latest_finalized_slot: u64,
         latest_finalized_block: u64,
@@ -155,9 +158,37 @@ impl ProofService {
                 .await?;
 
             let proof_service = self.clone();
-            tokio::spawn(async move {
-                Self::generate_and_store_proof(request, proof_service).await;
-            });
+            let lock_key = self.get_redis_lock_key_per_proof_id(&ProofId::new(&request));
+            // Try to acquire per-proof redis lock before exiting this function and releasing the redis global lock. This will
+            // protect us from spawning multiple tokio green threads that are responsible for handling this ::Generating request
+            match try_acquire_redis_lock(
+                &mut self.redis_conn_manager,
+                &lock_key,
+                ORPHANED_PROOF_LOCK_ACQUIRE_DURATION_MS,
+            )
+            .await
+            {
+                Ok(true) => {
+                    // Successfully acquired the lock, proceed with spawning the task
+                    tokio::spawn(async move {
+                        Self::generate_and_store_proof(request, proof_service, lock_key).await;
+                    });
+                }
+                Ok(false) => {
+                    // Lock already exists, another worker is handling this proof
+                    debug!(
+                        target: "proof_service",
+                        "Skipping proof generation for request as it's already being processed by another worker"
+                    );
+                }
+                Err(e) => {
+                    // Error acquiring lock, log and continue
+                    warn!(
+                        target: "proof_service",
+                        "Failed to acquire lock for proof generation: {}", e
+                    );
+                }
+            }
         } else {
             proof_state.status = ProofRequestStatus::WaitingForFinality;
             self.redis_conn_manager
@@ -231,7 +262,7 @@ impl ProofService {
     /// Run the proof service, periodically checking for new finalized headers
     pub async fn run(mut self) -> anyhow::Result<()> {
         // todo: we might want to get checkpoint from .env to be 100% sure it's genuine
-        let checkpoint = get_latest_checkpoint().await;
+        let checkpoint = try_get_latest_checkpoint().await?;
         info!(
             target: "proof_service::run",
             "Initializing light client on checkpoint {:?}",
@@ -239,7 +270,7 @@ impl ProofService {
         );
 
         // todo: can we somehow check via genesis params that the loaded state is genuine? Mb it's already done?
-        let mut light_client = get_client(checkpoint).await;
+        let mut light_client = try_get_client(checkpoint).await?;
         info!(
             target: "proof_service::run",
             "Initialized light client with finalized slot {}",
@@ -277,6 +308,11 @@ impl ProofService {
                         warn!(target: "proof_service::run", "failed to update redis state to new finalized header {}. Error: {}", light_client.store.finalized_header.beacon().slot, e)
                     }
                 }
+            }
+
+            // Periodically check for and pick up orphaned proof generation tasks
+            if let Err(e) = self.try_pickup_orphaned_proofs().await {
+                warn!(target: "proof_service::run", "Error during orphaned proof pickup: {}", e);
             }
 
             let _ = interval.tick().await;
@@ -324,7 +360,7 @@ impl ProofService {
 
     /// Same as `try_advance_redis_state`, but assumes the redis lock is held
     async fn try_advance_redis_state_locked(
-        &self,
+        &mut self,
         latest_finalized_header: LightClientHeader,
     ) -> Result<bool, ProofServiceError> {
         let stored_finalized_header = self.get_finalized_header().await?;
@@ -339,8 +375,6 @@ impl ProofService {
             // - gather requests that are ::WaitingForFinality
             // - decide which require updating
             // - set new header and update all statuses all in the same call to redis. Meaning that if one reverts -- all change should revert
-
-            let conn = &mut self.redis_conn_manager.clone();
 
             // 1. Gather requests that are ::WaitingForFinality
             let waiting_requests = self
@@ -397,14 +431,42 @@ impl ProofService {
                 }
             }
             // Execute the transaction
-            pipe.query_async::<()>(conn).await?;
+            pipe.query_async::<()>(&mut self.redis_conn_manager).await?;
 
             // Requests with updated statuses are now in redis. Time to try to generate proofs for them
             for request in requests_to_process {
                 let proof_service = self.clone();
-                tokio::spawn(async move {
-                    Self::generate_and_store_proof(request, proof_service).await;
-                });
+                let lock_key = self.get_redis_lock_key_per_proof_id(&ProofId::new(&request));
+                // Try to acquire per-proof redis lock before exiting this function and releasing the redis global lock. This will
+                // protect us from spawning multiple tokio green threads that are responsible for handling this ::Generating request
+                match try_acquire_redis_lock(
+                    &mut self.redis_conn_manager,
+                    &lock_key,
+                    ORPHANED_PROOF_LOCK_ACQUIRE_DURATION_MS,
+                )
+                .await
+                {
+                    Ok(true) => {
+                        // Successfully acquired the lock, proceed with spawning the task
+                        tokio::spawn(async move {
+                            Self::generate_and_store_proof(request, proof_service, lock_key).await;
+                        });
+                    }
+                    Ok(false) => {
+                        // Lock already exists, another worker is handling this proof
+                        debug!(
+                            target: "proof_service",
+                            "Skipping proof generation for request as it's already being processed by another worker"
+                        );
+                    }
+                    Err(e) => {
+                        // Error acquiring lock, log and continue
+                        warn!(
+                            target: "proof_service",
+                            "Failed to acquire lock for proof generation: {}", e
+                        );
+                    }
+                }
             }
 
             return Ok(true);
@@ -486,27 +548,67 @@ impl ProofService {
         Ok(waiting_proofs)
     }
 
-    // todo: This function should not put error into redis because we failed to construct the inputs to proof generation.
-    // todo: It should only fill error if the proof errored OR requesting the proof errored after a couple of retries.
-    // ! todo: this function cuts a lot of corners in terms of error handling currently.
-    // ! todo: maybe it's fine to have this function just return an error and end the tokio thread.
-    // ! todo: Then we'll pick up this change on next ::Generating pick up cycle ??
-    // ! todo: Idea: if proof input setup fails, just move it back to ::WaitingForFinality. Eh, this is not perfect, cause how will it be picked up much later?
-    // ! todo: I think I should try to set up inputs to the proof a couple of times. If unsuccessful, write Errored to redis, let client re-request.
     /// request proof generation from a ZKVM
-    async fn generate_and_store_proof(request: ProofRequest, mut proof_service: ProofService) {
+    async fn generate_and_store_proof(
+        request: ProofRequest,
+        mut proof_service: ProofService,
+        // We can calculate this lock_key inside this function, but use this as indication of actually expecting this lock_key to be held when entering here
+        lock_key: String,
+    ) {
         // At this point, this function is a single control flow pertaining to a specific proof request
         // It can do any updates for this proof request entry with no redis lock held
-        // This function should not accidentally error and return without updating redis state, it should handle all errors
+        // This function handles all errors and decides if to write ::Errored state in redis based on those.
 
-        // todo: potentially, put a redis lock in here for a specific proof id. This is to show that current proof_id has
-        // todo: an associated function running. Otherwise, it's impossible to tell what to do with stale reqeuests with status ::Generating
+        let proof_id = ProofId::new(&request);
+        let cancellation_token = CancellationToken::new();
+        let _cancellation_token_guard = CancellationTokenGuard::new(cancellation_token.clone());
 
+        // todo: isolate this in a new function. Create lock guard here, then pass it into the fn
+        // Spawn a task that will run until this function is over and will auto-renew redis lock periodically. If this function
+        // crashes for some reason (e.g. PC crash), the lock will auto-release and this task will be picked up by some another worker
+        // on run_generating_tasks_pickup()
+        let mut conn = proof_service.redis_conn_manager.clone();
+        tokio::spawn(async move {
+            // tick every second
+            let mut ticker = tokio::time::interval(Duration::from_secs(1));
+
+            loop {
+                tokio::select! {
+                    _ = cancellation_token.cancelled() => {
+                        // Exit the loop if cancellation is requested
+                        break;
+                    }
+                    _ = ticker.tick() => {
+                        let res = redis::cmd("PEXPIRE")
+                            .arg(&lock_key)
+                            // extend lock for 2 seconds from now to extend it in one second time
+                            .arg(2000)
+                            .query_async::<i32>(&mut conn)
+                            .await;
+                        match res {
+                            Ok(res) => {
+                                if res == 1 {
+                                    info!("Successfully extended the lock for generating worker with id {}", proof_id.to_hex_string())
+                                } else {
+                                    warn!("Redis refused lock extension for generating worker with id {} . Lock does not exist", proof_id.to_hex_string())
+                                }
+                            }
+                            Err(e) => {
+                                warn!("Error extending redis lock for generating worker with id {} . Error: {}", proof_id.to_hex_string(), e)
+                            }
+                        }
+
+                    }
+                }
+            }
+        });
+
+        // todo? Move these to some kind of config file
         let max_tries_to_setup_input = 3;
         let sleep_duration_between_retries = 12; // one slot
         let mut attempt = 0;
         // todo: make a function out of this. There's too much code here
-        let stdin: SP1Stdin = loop {
+        let stdin: anyhow::Result<SP1Stdin> = loop {
             attempt += 1;
             match async {
                 // Fetch the checkpoint at requested slot
@@ -571,7 +673,7 @@ impl ProofService {
             }
             .await
             {
-                Ok(stdin) => break stdin,
+                Ok(stdin) => break Ok(stdin),
                 Err(e) => {
                     warn!(
                         "Failed to set up proof inputs (attempt {}/{}): {}",
@@ -588,18 +690,31 @@ impl ProofService {
                         // Last attempt failed, propagate the error
                         error!("All attempts to set up proof inputs failed");
 
-                        // todo: cancel spinning token
-                        return;
+                        break Err(anyhow!("{}", e));
                     }
                 }
             }
         };
 
-        let zk_proof = proof_service
-            .prover_client
-            .prove(&proof_service.proving_key, &stdin)
-            .groth16()
-            .run();
+        let zk_proof: Result<sp1_sdk::SP1ProofWithPublicValues, anyhow::Error> = match stdin {
+            Ok(stdin) => {
+                let proving_key = proof_service.proving_key.clone();
+                let prover_client = proof_service.prover_client.clone();
+                match tokio::task::spawn_blocking(move || {
+                    prover_client.prove(&proving_key, &stdin).groth16().run()
+                })
+                .await
+                {
+                    Ok(Ok(proof)) => Ok(proof), // Task completed successfully, returning Ok(proof)
+                    Ok(Err(proof_err)) => Err(proof_err), // Task completed successfully, returning Err(proof_err)
+                    Err(join_err) => Err(anyhow!(
+                        "Spawned proof generation task failed: {}",
+                        join_err
+                    )), // Task failed to join
+                }
+            }
+            Err(e) => Err(e), // Stdin setup failed
+        };
 
         let proof_id = ProofId::new(&request);
         let redis_state_key = proof_service.get_redis_key_proof(&proof_id);
@@ -713,7 +828,17 @@ impl ProofService {
         format!("{}:lock", self.redis_key_prefix)
     }
 
+    /// Generates a redis lock for a specific proof id. Useful for handling of requests with status ::Generating
+    fn get_redis_lock_key_per_proof_id(&self, proof_id: &ProofId) -> String {
+        format!(
+            "{}:lock:{}",
+            self.redis_key_prefix,
+            proof_id.to_hex_string()
+        )
+    }
+
     // todo? Pass in a lock key
+    // todo? Can simplify this a lot with CancellationTokenGuard + tokio::spawn that does deletion, that is waiting for a cancel
     /// A utility for calling functions that require global redis lock
     async fn do_with_redis_global_lock<F, R, A>(
         &mut self,
@@ -739,6 +864,73 @@ impl ProofService {
 
         result
     }
+
+    /// Attempts to find and restart proof generation for tasks that are in the 'Generating'
+    /// state but do not have an active worker lock in Redis.
+    async fn try_pickup_orphaned_proofs(&mut self) -> Result<(), ProofServiceError> {
+        debug!(target: "proof_service::pickup", "Checking for orphaned proof generation tasks...");
+
+        let generating_proofs = self
+            .get_proof_requests_by_status(ProofRequestStatus::Generating)
+            .await?;
+
+        if generating_proofs.is_empty() {
+            debug!(target: "proof_service::pickup", "No proofs found in ::Generating state.");
+            return Ok(());
+        }
+
+        debug!(target: "proof_service::pickup", "Found {} proofs in ::Generating state. Checking for locks...", generating_proofs.len());
+
+        let mut picked_up_count = 0;
+        for proof_state in generating_proofs {
+            let proof_id = ProofId::new(&proof_state.request);
+            let lock_key = self.get_redis_lock_key_per_proof_id(&proof_id);
+
+            // Try to acquire the lock. If successful, it means no worker holds it.
+            // Use a short duration just for the check; the spawned task will manage its own lock.
+            match try_acquire_redis_lock(
+                &mut self.redis_conn_manager,
+                &lock_key,
+                ORPHANED_PROOF_LOCK_ACQUIRE_DURATION_MS,
+            )
+            .await
+            {
+                Ok(true) => {
+                    // Lock acquired! This task is orphaned.
+                    warn!(target: "proof_service::pickup", "Picking up orphaned proof generation task for ID: {}. Lock key acquired: {}", proof_id.to_hex_string(), lock_key);
+                    picked_up_count += 1;
+
+                    // Spawn a new worker for this task.
+                    // Pass the acquired lock key, as the spawned task expects it to be held initially.
+                    let proof_service_clone = self.clone();
+                    tokio::spawn(async move {
+                        Self::generate_and_store_proof(
+                            proof_state.request,
+                            proof_service_clone,
+                            lock_key, // Pass the key we just acquired
+                        )
+                        .await;
+                    });
+                }
+                Ok(false) => {
+                    // Lock is held by another worker, which is expected for active tasks.
+                    debug!(target: "proof_service::pickup", "Proof ID {} is actively being processed (lock exists).", proof_id.to_hex_string());
+                }
+                Err(e) => {
+                    // Error trying to acquire the lock.
+                    error!(target: "proof_service::pickup", "Failed to check/acquire lock for proof ID {}: {}. Skipping pickup.", proof_id.to_hex_string(), e);
+                }
+            }
+        }
+
+        if picked_up_count > 0 {
+            info!(target: "proof_service::pickup", "Successfully picked up and restarted {} orphaned proof tasks.", picked_up_count);
+        } else {
+            debug!(target: "proof_service::pickup", "No orphaned tasks found requiring pickup.");
+        }
+
+        Ok(())
+    }
 }
 
 async fn try_acquire_redis_lock<T>(
@@ -761,6 +953,7 @@ where
     Ok(acquired)
 }
 
+// todo: this should be required anymore as we now store hex values in redis. Will remove later
 #[allow(dead_code)]
 async fn get_human_readable_proof_state(
     conn: &mut ConnectionManager,
@@ -776,3 +969,9 @@ async fn get_human_readable_proof_state(
     );
     Ok(())
 }
+
+/*
+todo:
+idea for test: request proof that should immediately go into ::Generating (old proof). Check that the generating lock is held
+For this to work, I need to ensure that my prover mode is MOCK_PROVER: so set .env var, that's easy
+ */
