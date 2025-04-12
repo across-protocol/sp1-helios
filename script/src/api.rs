@@ -239,7 +239,7 @@ async fn request_proof_handler(
     )
 )]
 async fn get_proof_handler(
-    State(service): State<ProofService>,
+    State(mut service): State<ProofService>,
     Path(proof_id_hex): Path<String>,
 ) -> Result<impl IntoResponse, ProofServiceError> {
     let proof_id_bytes = B256::from_str(&proof_id_hex).map_err(|_| {
