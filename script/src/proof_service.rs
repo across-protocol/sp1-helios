@@ -80,7 +80,7 @@ impl ProofService {
         let proof_request_state = self.get_proof(&proof_id).await?;
 
         if redis_lock_acquired {
-            log::info!("Lock acquired for new proof request: {:?}", proof_id);
+            log::debug!(target: "proof_service::api", "Global lock acquired for new proof request ID: {}", proof_id.to_hex_string());
 
             let finalized_header = self.get_finalized_header().await?.ok_or_else(|| {
                 ProofServiceError::Internal(
@@ -176,16 +176,18 @@ impl ProofService {
                 }
                 Ok(false) => {
                     // Lock already exists, another worker is handling this proof
+                    let req_id = ProofId::new(&request); // Calculate ID here for logging
                     debug!(
-                        target: "proof_service",
-                        "Skipping proof generation for request as it's already being processed by another worker"
+                        target: "proof_service::api",
+                        "Skipping proof generation for ID: {}, lock already held.", req_id.to_hex_string()
                     );
                 }
                 Err(e) => {
-                    // Error acquiring lock, log and continue
+                    let req_id = ProofId::new(&request); // Calculate ID here for logging
+                                                         // Error acquiring lock, log and continue
                     warn!(
-                        target: "proof_service",
-                        "Failed to acquire lock for proof generation: {}", e
+                        target: "proof_service::api",
+                        "Failed to acquire lock for proof generation ID: {}: {}", req_id.to_hex_string(), e
                     );
                 }
             }
@@ -255,7 +257,7 @@ impl ProofService {
             source_chain_provider,
         };
 
-        info!("ProofService initialized successfully.");
+        info!(target: "proof_service::init", "ProofService initialized successfully.");
         Ok(service)
     }
 
@@ -265,7 +267,7 @@ impl ProofService {
         let checkpoint = try_get_latest_checkpoint().await?;
         info!(
             target: "proof_service::run",
-            "Initializing light client on checkpoint {:?}",
+            "Initializing light client with checkpoint: {:?}",
             checkpoint
         );
 
@@ -273,7 +275,7 @@ impl ProofService {
         let mut light_client = try_get_client(checkpoint).await?;
         info!(
             target: "proof_service::run",
-            "Initialized light client with finalized slot {}",
+            "Initialized light client. Finalized slot: {}",
             light_client.store.finalized_header.beacon().slot
         );
 
@@ -283,8 +285,7 @@ impl ProofService {
 
         info!(
             target: "proof_service::run",
-            "Starting finalized header polling loop with interval of {}s",
-            12
+            "Starting main loop. Header polling interval: 12s"
         );
 
         // We advance DB state on startup and whenever we see a new finalized slot
@@ -298,21 +299,21 @@ impl ProofService {
                 match res {
                     Ok(updated) => {
                         if updated {
-                            info!(target: "proof_service::run", "updated redis state to new finalized header: slot {}", light_client.store.finalized_header.beacon().slot)
+                            info!(target: "proof_service::run", "Advanced Redis state to finalized header slot: {}", light_client.store.finalized_header.beacon().slot)
                         } else {
-                            warn!(target: "proof_service::run", "try_advance_redis_state succeeded, but did not advance redis state: slot {}", light_client.store.finalized_header.beacon().slot)
+                            warn!(target: "proof_service::run", "Redis state advancement called but no update occurred for slot: {}", light_client.store.finalized_header.beacon().slot)
                         }
                         should_advance_db_state = false;
                     }
                     Err(e) => {
-                        warn!(target: "proof_service::run", "failed to update redis state to new finalized header {}. Error: {}", light_client.store.finalized_header.beacon().slot, e)
+                        warn!(target: "proof_service::run", "Failed to advance Redis state for finalized header slot {}. Error: {}", light_client.store.finalized_header.beacon().slot, e)
                     }
                 }
             }
 
             // Periodically check for and pick up orphaned proof generation tasks
             if let Err(e) = self.try_pickup_orphaned_proofs().await {
-                warn!(target: "proof_service::run", "Error during orphaned proof pickup: {}", e);
+                warn!(target: "proof_service::run", "Error during orphaned proof pickup check: {}", e);
             }
 
             let _ = interval.tick().await;
@@ -320,14 +321,14 @@ impl ProofService {
             let prev_finalized_slot = light_client.store.finalized_header.beacon().slot;
             let res = light_client.advance().await;
             if let Err(err) = res {
-                warn!(target: "proof_service::run", "advance error: {}", err);
+                warn!(target: "proof_service::run", "Helios light client advance error: {}", err);
                 continue;
             }
             let new_finalized_slot = light_client.store.finalized_header.beacon().slot;
             if new_finalized_slot > prev_finalized_slot {
                 info!(
                     target: "proof_service::run",
-                    "Light client finalized slot advanced successfully: {} -> {}",
+                    "Helios light client advanced. Finalized slot: {} -> {}",
                     prev_finalized_slot, new_finalized_slot
                 );
                 should_advance_db_state = true;
@@ -454,16 +455,18 @@ impl ProofService {
                     }
                     Ok(false) => {
                         // Lock already exists, another worker is handling this proof
+                        let req_id = ProofId::new(&request);
                         debug!(
-                            target: "proof_service",
-                            "Skipping proof generation for request as it's already being processed by another worker"
+                            target: "proof_service::state",
+                            "Skipping proof generation spawn for ID: {}, lock already held.", req_id.to_hex_string()
                         );
                     }
                     Err(e) => {
-                        // Error acquiring lock, log and continue
+                        let req_id = ProofId::new(&request); // Calculate ID here for logging
+                                                             // Error acquiring lock, log and continue
                         warn!(
-                            target: "proof_service",
-                            "Failed to acquire lock for proof generation: {}", e
+                            target: "proof_service::state",
+                            "Failed to acquire lock for proof generation spawn ID: {}: {}", req_id.to_hex_string(), e
                         );
                     }
                 }
@@ -524,7 +527,8 @@ impl ProofService {
                             Err(e) => {
                                 // Log deserialization error but continue processing other keys
                                 warn!(
-                                    "Failed to deserialize proof request state from {}: {}",
+                                    target: "proof_service::redis",
+                                    "Failed to deserialize proof request state from Redis key {}: {}",
                                     keys[i], e
                                 );
                             }
@@ -541,7 +545,8 @@ impl ProofService {
         }
 
         debug!(
-            "Found {} proof requests with status {:?}",
+            target: "proof_service::redis",
+            "Scan found {} proof requests with status: {:?}",
             waiting_proofs.len(),
             status
         );
@@ -588,13 +593,13 @@ impl ProofService {
                         match res {
                             Ok(res) => {
                                 if res == 1 {
-                                    info!("Successfully extended the lock for generating worker with id {}", proof_id.to_hex_string())
+                                    debug!(target: "proof_service::generate", "[ProofID: {}] Extended worker lock.", proof_id.to_hex_string())
                                 } else {
-                                    warn!("Redis refused lock extension for generating worker with id {} . Lock does not exist", proof_id.to_hex_string())
+                                    warn!(target: "proof_service::generate", "[ProofID: {}] Failed to extend worker lock: Lock key does not exist or expired.", proof_id.to_hex_string())
                                 }
                             }
                             Err(e) => {
-                                warn!("Error extending redis lock for generating worker with id {} . Error: {}", proof_id.to_hex_string(), e)
+                                warn!(target: "proof_service::generate", "[ProofID: {}] Error extending worker lock: {}", proof_id.to_hex_string(), e)
                             }
                         }
 
@@ -676,7 +681,9 @@ impl ProofService {
                 Ok(stdin) => break Ok(stdin),
                 Err(e) => {
                     warn!(
-                        "Failed to set up proof inputs (attempt {}/{}): {}",
+                        target: "proof_service::generate",
+                        "[ProofID: {}] Failed to setup proof inputs (attempt {}/{}): {}",
+                        proof_id.to_hex_string(),
                         attempt + 1,
                         max_tries_to_setup_input,
                         e
@@ -688,9 +695,13 @@ impl ProofService {
                     .await;
                     if attempt == max_tries_to_setup_input - 1 {
                         // Last attempt failed, propagate the error
-                        error!("All attempts to set up proof inputs failed");
+                        error!(target: "proof_service::generate", "[ProofID: {}] All {} attempts to setup proof inputs failed.", proof_id.to_hex_string(), max_tries_to_setup_input); // Added target and proof ID
 
-                        break Err(anyhow!("{}", e));
+                        break Err(anyhow!(
+                            "[ProofID: {}] Final attempt to setup proof inputs failed: {}",
+                            proof_id.to_hex_string(),
+                            e
+                        ));
                     }
                 }
             }
@@ -724,9 +735,9 @@ impl ProofService {
                 let public_values_hex_string = hex::encode(proof.public_values.to_vec());
 
                 info!(
-                    target: "proof_service::generate_and_store_proof",
-                    "Storing successfully generated proof in redis! Id: {} , Key: {} , Proof: {} , Public Values: {}",
-                    proof_id.to_hex_string(), redis_state_key, proof_hex_string, public_values_hex_string
+                    target: "proof_service::generate",
+                    "[ProofID: {}] Proof generated successfully. Storing in Redis. Key: {}",
+                    proof_id.to_hex_string(), redis_state_key
                 );
 
                 let mut proof_state = ProofRequestState::new(request.clone());
@@ -741,9 +752,10 @@ impl ProofService {
             }
             Err(e) => {
                 warn!(
-                    target: "proof_service::generate_and_store_proof",
-                    "Error generating proof for id {:?} . Error: {}",
-                    proof_id, e.to_string()
+                    target: "proof_service::generate",
+                    "[ProofID: {}] Error generating proof: {}",
+                    proof_id.to_hex_string(),
+                    e.to_string()
                 );
 
                 let mut proof_state = ProofRequestState::new(request.clone());
@@ -768,8 +780,9 @@ impl ProofService {
                 Err(e) => {
                     retry_count += 1;
                     warn!(
-                        target: "proof_service::generate_and_store_proof",
-                        "Failed to store proof state in Redis (attempt {}): {}. Retrying in 1s...",
+                        target: "proof_service::generate",
+                        "[ProofID: {}] Failed to store proof state in Redis (attempt {}): {}. Retrying in 1s...",
+                        proof_id.to_hex_string(),
                         retry_count, e
                     );
                     tokio::time::sleep(std::time::Duration::from_secs(1)).await;
@@ -850,17 +863,15 @@ impl ProofService {
     {
         // Try acquire redis lock
         let acquired = self.acquire_redis_global_lock().await?;
-        debug!("do_with_redis_global_lock: acquired {}", acquired);
+        debug!(target: "proof_service::lock", "Global lock acquire attempt result: {}", acquired);
 
         let result = f(self, args, acquired).await;
 
         // Best-effort release of redis lock
-        let _ = self
-            .redis_conn_manager
-            .del::<_, ()>(self.get_redis_global_lock_key())
-            .await;
+        let lock_key = self.get_redis_global_lock_key();
+        let _: Result<(), _> = self.redis_conn_manager.del(&lock_key).await;
 
-        debug!("do_with_redis_global_lock: released");
+        debug!(target: "proof_service::lock", "Global lock released (best-effort). Key: {}", lock_key);
 
         result
     }
