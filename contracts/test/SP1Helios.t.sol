@@ -146,7 +146,7 @@ contract SP1HeliosTest is Test {
 
         // Update with storage slot
         vm.prank(initialUpdater);
-        helios.update(proof, publicValues, INITIAL_HEAD);
+        helios.update(proof, publicValues);
 
         // Verify storage slot value
         assertEq(helios.getStorageSlot(blockNumber, contractAddress, slot), value);
@@ -210,7 +210,7 @@ contract SP1HeliosTest is Test {
 
         // Update should succeed when called by an updater
         vm.prank(updatersArray[0]);
-        fixedUpdaterHelios.update(proof, publicValues, INITIAL_HEAD);
+        fixedUpdaterHelios.update(proof, publicValues);
 
         // Verify update was successful
         assertEq(fixedUpdaterHelios.head(), INITIAL_HEAD + 1);
@@ -279,7 +279,7 @@ contract SP1HeliosTest is Test {
         }
 
         vm.prank(initialUpdater);
-        helios.update(proof, publicValues, INITIAL_HEAD);
+        helios.update(proof, publicValues);
 
         // Verify state updates
         assertEq(helios.head(), newHead);
@@ -323,9 +323,9 @@ contract SP1HeliosTest is Test {
 
         vm.prank(initialUpdater);
         vm.expectRevert(
-            abi.encodeWithSelector(SP1Helios.PreviousHeadNotSet.selector, nonExistentHead)
+            abi.encodeWithSelector(SP1Helios.PreviousHeaderNotSet.selector, nonExistentHead)
         );
-        helios.update(proof, publicValues, nonExistentHead);
+        helios.update(proof, publicValues);
     }
 
     function testUpdateWithTooOldFromHead() public {
@@ -351,7 +351,7 @@ contract SP1HeliosTest is Test {
 
         vm.prank(initialUpdater);
         vm.expectRevert(abi.encodeWithSelector(SP1Helios.PreviousHeadTooOld.selector, INITIAL_HEAD));
-        helios.update(proof, publicValues, INITIAL_HEAD);
+        helios.update(proof, publicValues);
     }
 
     function testUpdateWithNewHeadBehindFromHead() public {
@@ -378,8 +378,8 @@ contract SP1HeliosTest is Test {
         vm.warp(helios.slotTimestamp(INITIAL_HEAD) + 1 hours);
 
         vm.prank(initialUpdater);
-        vm.expectRevert(abi.encodeWithSelector(SP1Helios.SlotBehindHead.selector, newHead));
-        helios.update(proof, publicValues, INITIAL_HEAD);
+        vm.expectRevert(abi.encodeWithSelector(SP1Helios.NonIncreasingHead.selector, newHead));
+        helios.update(proof, publicValues);
     }
 
     function testUpdateWithIncorrectSyncCommitteeHash() public {
@@ -413,7 +413,7 @@ contract SP1HeliosTest is Test {
                 INITIAL_SYNC_COMMITTEE_HASH
             )
         );
-        helios.update(proof, publicValues, INITIAL_HEAD);
+        helios.update(proof, publicValues);
     }
 
     function testRoleBasedAccessControl() public {
@@ -440,7 +440,7 @@ contract SP1HeliosTest is Test {
         bytes memory proof = new bytes(0);
 
         vm.expectRevert();
-        helios.update(proof, publicValues, INITIAL_HEAD);
+        helios.update(proof, publicValues);
     }
 
     function testNoUpdaters() public {
@@ -589,7 +589,7 @@ contract SP1HeliosTest is Test {
         emit SP1Helios.SyncCommitteeUpdate(nextPeriod, nextSyncCommitteeHash);
 
         vm.prank(initialUpdater);
-        helios.update(proof, publicValues1, INITIAL_HEAD);
+        helios.update(proof, publicValues1);
 
         // Verify the updates
         assertEq(helios.head(), nextPeriodHead);
@@ -641,7 +641,7 @@ contract SP1HeliosTest is Test {
         emit SP1Helios.SyncCommitteeUpdate(period + 1, nextSyncCommitteeHash);
 
         vm.prank(initialUpdater);
-        helios.update(proof, publicValues2, prevHead);
+        helios.update(proof, publicValues2);
 
         // Verify the second update
         assertEq(helios.head(), newHead);
