@@ -105,12 +105,13 @@ contract SP1Helios is AccessControlEnumerable {
     );
     event UpdaterAdded(address indexed updater);
 
-    error SlotBehindHead(uint256 slot);
+    error NonIncreasingHead(uint256 slot);
     error SyncCommitteeAlreadySet(uint256 period);
     error InvalidHeaderRoot(uint256 slot);
     error InvalidStateRoot(uint256 slot);
     error SyncCommitteeStartMismatch(bytes32 given, bytes32 expected);
-    error PreviousHeadNotSet(uint256 slot);
+    error PreviousHeaderNotSet(uint256 slot);
+    error PreviousHeaderMismatch(bytes32 given, bytes32 expected);
     error PreviousHeadTooOld(uint256 slot);
     error NoUpdatersProvided();
 
@@ -154,24 +155,31 @@ contract SP1Helios is AccessControlEnumerable {
     /// @dev Verifies an SP1 proof and updates the light client state based on the proof outputs
     /// @param proof The proof bytes for the SP1 proof
     /// @param publicValues The public commitments from the SP1 proof
-    /// @param fromHead The head slot to prove against
-    function update(bytes calldata proof, bytes calldata publicValues, uint256 fromHead)
+    function update(bytes calldata proof, bytes calldata publicValues)
         external
         onlyRole(UPDATER_ROLE)
     {
-        if (headers[fromHead] == bytes32(0)) {
-            revert PreviousHeadNotSet(fromHead);
+        // Parse the outputs from the committed public values associated with the proof.
+        ProofOutputs memory po = abi.decode(publicValues, (ProofOutputs));
+
+        uint256 fromHead = po.prevHead;
+        // Ensure that po.newHead is strictly greater than po.prevHead
+        if (po.newHead <= fromHead) {
+            revert NonIncreasingHead(po.newHead);
+        }
+
+        bytes32 storedPrevHeader = headers[fromHead];
+        if (storedPrevHeader == bytes32(0)) {
+            revert PreviousHeaderNotSet(fromHead);
+        }
+
+        if (storedPrevHeader != po.prevHeader) {
+            revert PreviousHeaderMismatch(po.prevHeader, storedPrevHeader);
         }
 
         // Check if the head being proved against is older than allowed.
         if (block.timestamp - slotTimestamp(fromHead) > MAX_SLOT_AGE) {
             revert PreviousHeadTooOld(fromHead);
-        }
-
-        // Parse the outputs from the committed public values associated with the proof.
-        ProofOutputs memory po = abi.decode(publicValues, (ProofOutputs));
-        if (po.newHead <= fromHead) {
-            revert SlotBehindHead(po.newHead);
         }
 
         uint256 currentPeriod = getSyncCommitteePeriod(fromHead);
@@ -218,19 +226,19 @@ contract SP1Helios is AccessControlEnumerable {
             emit StorageSlotVerified(po.newHead, slot.key, slot.value, slot.contractAddress);
         }
 
-        uint256 period = getSyncCommitteePeriod(po.newHead);
+        uint256 newPeriod = getSyncCommitteePeriod(po.newHead);
 
-        // If the sync committee for the new peroid is not set, set it.
+        // If the sync committee for the new period is not set, set it.
         // This can happen if the light client was very behind and had a lot of updates
         // Note: Only the latest sync committee is stored, not the intermediate ones from every update.
         // This may leave gaps in the sync committee history
-        if (syncCommittees[period] == bytes32(0)) {
-            syncCommittees[period] = po.syncCommitteeHash;
-            emit SyncCommitteeUpdate(period, po.syncCommitteeHash);
+        if (syncCommittees[newPeriod] == bytes32(0)) {
+            syncCommittees[newPeriod] = po.syncCommitteeHash;
+            emit SyncCommitteeUpdate(newPeriod, po.syncCommitteeHash);
         }
-        // Set next peroid's sync committee hash if value exists.
+        // Set next period's sync committee hash if value exists.
         if (po.nextSyncCommitteeHash != bytes32(0)) {
-            uint256 nextPeriod = period + 1;
+            uint256 nextPeriod = newPeriod + 1;
 
             // If the next sync committee is already correct, we don't need to update it.
             if (syncCommittees[nextPeriod] != po.nextSyncCommitteeHash) {

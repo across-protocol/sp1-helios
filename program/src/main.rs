@@ -18,7 +18,7 @@ use tree_hash::TreeHash;
 /// 2. Apply finality update
 /// 3. Verify execution state root proof
 /// 4. Verify storage slot proofs
-/// 5. Asset all updates are valid
+/// 5. Assert all updates are valid
 /// 6. Commit new state root, header, and sync committee for usage in the on-chain contract
 pub fn main() {
     let encoded_inputs = sp1_zkvm::io::read_vec();
@@ -69,6 +69,11 @@ pub fn main() {
     println!("Finality update is valid.");
 
     apply_finality_update(&mut store, &finality_update);
+
+    // Ensure that the finalized beacon header slot after applying updates is strictly greater than the initial slot.
+    // This confirms the execution_payload referenced by the finalized_header corresponds to this newer slot, due to
+    // checks against beacon_body_root performed during update verification.
+    assert!(store.finalized_header.beacon().slot > prev_head);
 
     // 3. Verify storage slot proofs
     let execution_state_root = *store
@@ -121,7 +126,7 @@ fn verify_storage_slot_proofs(
     if let Err(e) = proof::verify_proof(
         execution_state_root,
         address_nibbles,
-        Some(rlp_encoded_trie_account.clone()),
+        Some(rlp_encoded_trie_account),
         &contract_storage.mpt_proof,
     ) {
         panic!(
