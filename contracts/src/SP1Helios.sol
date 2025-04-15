@@ -253,7 +253,7 @@ contract SP1Helios is AccessControlEnumerable {
     /// @notice Gets the current epoch based on the latest head
     /// @dev An epoch consists of 32 slots
     /// @return The current epoch number
-    function getCurrentEpoch() public view returns (uint256) {
+    function getCurrentEpoch() external view returns (uint256) {
         return head / SLOTS_PER_EPOCH;
     }
 
@@ -268,7 +268,7 @@ contract SP1Helios is AccessControlEnumerable {
     /// @notice Gets the timestamp of the latest head
     /// @dev Convenience function that calls slotTimestamp(head)
     /// @return The Unix timestamp in seconds for the current head slot
-    function headTimestamp() public view returns (uint256) {
+    function headTimestamp() external view returns (uint256) {
         return slotTimestamp(head);
     }
 
