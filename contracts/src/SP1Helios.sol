@@ -42,16 +42,16 @@ contract SP1Helios is AccessControlEnumerable {
     uint256 public head;
 
     /// @notice Maps from a slot to a beacon block header root
-    mapping(uint256 => bytes32) public headers;
+    mapping(uint256 beaconSlot => bytes32 beaconHeaderRoot) public headers;
 
     /// @notice Maps from a slot to the current finalized execution state root
-    mapping(uint256 => bytes32) public executionStateRoots;
+    mapping(uint256 beaconSlot => bytes32 executionStateRoot) public executionStateRoots;
 
     /// @notice Maps from a period to the hash for the sync committee
-    mapping(uint256 => bytes32) public syncCommittees;
+    mapping(uint256 syncCommitteePeriod => bytes32 syncCommitteeHash) public syncCommittees;
 
     /// @notice Maps from (block number, contract, slot) tuple to storage value
-    mapping(bytes32 => bytes32) public storageValues;
+    mapping(bytes32 computedStorageKey => bytes32 storageValue) public storageValues;
 
     /// @notice The verification key for the SP1 Helios program
     bytes32 public immutable heliosProgramVkey;
