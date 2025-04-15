@@ -123,8 +123,22 @@ elif [[ "$MODE_LC" == "remote" ]]; then
   echo
 
   # --- Get Image Tag ---
-  read -p "Enter the remote image tag [default: latest]: " USER_TAG
-  IMAGE_TAG=${USER_TAG:-latest}
+  # Try to get the short git commit hash as the default tag
+  DEFAULT_TAG="latest" # Fallback default
+  if git rev-parse --is-inside-work-tree > /dev/null 2>&1; then
+    GIT_HASH=$(git rev-parse --short HEAD 2>/dev/null || echo "")
+    if [[ -n "$GIT_HASH" ]]; then
+        DEFAULT_TAG=$GIT_HASH
+        echo "INFO: Using default tag from git commit hash: $DEFAULT_TAG"
+    else
+        echo "WARNING: Could not get git commit hash, defaulting tag to 'latest'."
+    fi
+  else
+      echo "WARNING: Not inside a git repository, defaulting tag to 'latest'."
+  fi
+
+  read -p "Enter the remote image tag [default: ${DEFAULT_TAG}]: " USER_TAG
+  IMAGE_TAG=${USER_TAG:-${DEFAULT_TAG}} # Use computed default
   echo "Using tag: ${IMAGE_TAG}"
   echo
 
