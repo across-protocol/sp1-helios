@@ -187,26 +187,28 @@ contract SP1Helios is AccessControlEnumerable {
         ISP1Verifier(verifier).verifyProof(heliosProgramVkey, publicValues, proof);
 
         // Check that the new header hasnt been set already.
-        if (headers[po.newHead] != bytes32(0) && headers[po.newHead] != po.newHeader) {
+        bytes32 storedHeader = headers[po.newHead];
+        if (storedHeader == bytes32(0)) {
+            // Set new header
+            headers[po.newHead] = po.newHeader;
+        } else if (storedHeader != po.newHeader) {
             revert InvalidHeaderRoot(po.newHead);
         }
-        // Set new header.
-        headers[po.newHead] = po.newHeader;
+
+        // Update the contract's head if the head slot from the proof outputs is newer.
         if (head < po.newHead) {
             head = po.newHead;
+            emit HeadUpdate(po.newHead, po.newHeader);
         }
 
         // Check that the new state root hasnt been set already.
-        if (
-            executionStateRoots[po.newHead] != bytes32(0)
-                && executionStateRoots[po.newHead] != po.executionStateRoot
-        ) {
+        bytes32 storedExecutionRoot = executionStateRoots[po.newHead];
+        if (storedExecutionRoot == bytes32(0)) {
+            // Set new state root
+            executionStateRoots[po.newHead] = po.executionStateRoot;    
+        } else if (storedExecutionRoot != po.executionStateRoot) {
             revert InvalidStateRoot(po.newHead);
         }
-
-        // Finally set the new state root.
-        executionStateRoots[po.newHead] = po.executionStateRoot;
-        emit HeadUpdate(po.newHead, po.newHeader);
 
         // Store all provided storage slot values
         for (uint256 i = 0; i < po.slots.length; i++) {
