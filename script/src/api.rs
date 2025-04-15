@@ -277,10 +277,10 @@ pub async fn start_api_server(proof_service: ProofService) -> JoinHandle<()> {
     // Ensure environment variables are loaded
     dotenv::dotenv().ok();
 
-    let api_port = env::var("API_PORT")
-        .expect("API_PORT environment variable must be set")
+    let api_port = env::var("PORT")
+        .expect("PORT environment variable must be set")
         .parse::<u16>()
-        .expect("API_PORT must be a valid number");
+        .expect("PORT must be a valid number");
 
     info!("Starting API server on port {}", api_port);
 
