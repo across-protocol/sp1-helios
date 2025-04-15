@@ -126,7 +126,7 @@ fn verify_storage_slot_proofs(
     if let Err(e) = proof::verify_proof(
         execution_state_root,
         address_nibbles,
-        Some(rlp_encoded_trie_account.clone()),
+        Some(rlp_encoded_trie_account),
         &contract_storage.mpt_proof,
     ) {
         panic!(
