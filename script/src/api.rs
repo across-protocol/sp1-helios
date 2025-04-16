@@ -16,6 +16,7 @@ use axum::{
     serve, Json, Router,
 };
 use log::{error, info};
+use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use std::str::FromStr;
 use std::{env, net::SocketAddr};
@@ -98,14 +99,18 @@ pub struct ProofRequestResponse {
 
 /// Response to a proof generation request (used for API output)
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
-pub struct ProofStateResponse {
+#[serde(bound = "ProofOutput: DeserializeOwned")]
+pub struct ProofStateResponse<ProofOutput>
+where
+    ProofOutput: Clone + Serialize + DeserializeOwned + Send + Sync + 'static,
+{
     /// Unique ID for the proof request (hex-encoded keccak256 hash of request data)
     pub proof_id: String,
     /// Status of the proof generation
     pub status: ProofStatusResponse,
     /// Calldata for the update function (only present when status is Success)
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub update_calldata: Option<SP1HeliosProofData>,
+    pub update_calldata: Option<ProofOutput>,
     /// Error message (only present when status is Errored)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error_message: Option<String>,
@@ -121,7 +126,8 @@ pub struct ProofStateResponse {
             ApiProofRequest,
             ProofStatusResponse,
             ProofRequestResponse,
-            ProofStateResponse
+            // list all appropriate ProofStateResponse variants as we add new proof backends.
+            ProofStateResponse<SP1HeliosProofData>
         )
     ),
     tags(
@@ -239,7 +245,8 @@ where
         ("id" = String, Path, description = "Proof ID (hex string)")
     ),
     responses(
-        (status = 200, description = "Proof information retrieved", body = ProofStateResponse),
+        // todo: the 200 response body currently shows only SP1Helios variant. If we add new backends, like R0VM, this is not 100% accurate doc. But also not an urgent fix
+        (status = 200, description = "Proof information retrieved", body = ProofStateResponse<SP1HeliosProofData>),
         (status = 404, description = "Proof not found"),
         (status = 400, description = "Invalid proof ID format"),
         (status = 500, description = "Internal server error")
@@ -281,11 +288,13 @@ pub trait ApiProofService: Clone + Send + Sync + 'static {
     /// Associated type for the specific proof output format produced by the backend.
     /// This type must be serializable/deserializable, thread-safe, and cloneable.
     /// It determines the structure of the `update_calldata` field when successful.
-    // type ProofOutput: Serialize + Deserialize<'static> + Send + Sync + Clone + 'static;
+    type ProofOutput: Clone + Serialize + DeserializeOwned + Send + Sync + 'static;
 
     /// Retrieves the current state of a proof request by its ID.
-    async fn get_proof(&self, id: &ProofId)
-        -> Result<Option<ProofRequestState>, ProofServiceError>;
+    async fn get_proof(
+        &self,
+        id: &ProofId,
+    ) -> Result<Option<ProofRequestState<Self::ProofOutput>>, ProofServiceError>;
 
     /// Submits a new request for proof generation.
     /// Returns the ProofId and the initial status (e.g., Pending).

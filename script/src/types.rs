@@ -2,7 +2,7 @@ use crate::api::ProofRequest;
 use alloy_primitives::B256;
 use alloy_rlp::Encodable;
 use log::error;
-use serde::{Deserialize, Serialize};
+use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use thiserror::Error;
 use utoipa::ToSchema;
 
@@ -56,20 +56,26 @@ pub enum ProofRequestStatus {
 
 /// Represents the state of a proof request stored in Redis.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ProofRequestState {
+#[serde(bound = "ProofOutput: DeserializeOwned")]
+pub struct ProofRequestState<ProofOutput>
+where
+    ProofOutput: Clone + Serialize + DeserializeOwned + Send + Sync + 'static,
+{
     pub status: ProofRequestStatus,
     /// The original request that initiated this proof generation.
     pub request: ProofRequest,
     /// Transaction hash or identifier from the external proof network (e.g., SP1).
     pub proof_network_tx_id: Option<String>,
     /// Final proof data, available only on success.
-    #[cfg(feature = "sp1-backend")]
-    pub proof_data: Option<SP1HeliosProofData>,
+    pub proof_data: Option<ProofOutput>,
     /// Error message if proof generation failed.
     pub error_message: Option<String>,
 }
 
-impl ProofRequestState {
+impl<ProofOutput> ProofRequestState<ProofOutput>
+where
+    ProofOutput: Clone + Serialize + DeserializeOwned + Send + Sync + 'static,
+{
     /// Creates a new ProofState with Initiated status and default values.
     pub fn new(request: ProofRequest) -> Self {
         ProofRequestState {

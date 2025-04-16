@@ -3,16 +3,23 @@ use anyhow::{anyhow, Context};
 use helios_consensus_core::types::LightClientHeader;
 use log::{debug, info, warn};
 use redis::{aio::ConnectionManager, AsyncCommands, Client};
-use serde::de::DeserializeOwned;
-use std::{env, time::Duration};
+use serde::{de::DeserializeOwned, Serialize};
+use std::{env, marker::PhantomData, time::Duration};
 
-pub struct RedisStore {
+pub struct RedisStore<ProofOutput>
+where
+    ProofOutput: Clone + Serialize + DeserializeOwned + Send + Sync + 'static,
+{
     pub conn_manager: ConnectionManager,
     key_prefix: String,
     global_lock_duration: Duration,
+    _phantom: PhantomData<ProofOutput>,
 }
 
-impl RedisStore {
+impl<ProofOutput> RedisStore<ProofOutput>
+where
+    ProofOutput: Clone + Serialize + DeserializeOwned + Send + Sync + 'static,
+{
     pub async fn new() -> anyhow::Result<Self> {
         let redis_url =
             env::var("REDIS_URL").context("REDIS_URL environment variable must be set")?;
@@ -44,6 +51,7 @@ impl RedisStore {
             conn_manager,
             key_prefix,
             global_lock_duration: Duration::from_secs(lock_duration_secs),
+            _phantom: PhantomData::<ProofOutput>,
         })
     }
 
@@ -72,7 +80,7 @@ impl RedisStore {
     pub async fn get_proof_state(
         &mut self,
         id: &ProofId,
-    ) -> Result<Option<ProofRequestState>, ProofServiceError> {
+    ) -> Result<Option<ProofRequestState<ProofOutput>>, ProofServiceError> {
         let key = self.proof_state_key(id);
         self.read_json_value(&key).await
     }
@@ -89,7 +97,7 @@ impl RedisStore {
     pub async fn set_proof_state(
         &mut self,
         id: &ProofId,
-        state: &ProofRequestState,
+        state: &ProofRequestState<ProofOutput>,
     ) -> Result<(), ProofServiceError> {
         let key = self.proof_state_key(id);
         let json = serde_json::to_string(state)?;
@@ -112,7 +120,7 @@ impl RedisStore {
     pub async fn update_finalized_header_and_proof_states(
         &mut self,
         latest_finalized_header: &LightClientHeader,
-        updated_states: Vec<(ProofId, ProofRequestState)>,
+        updated_states: Vec<(ProofId, ProofRequestState<ProofOutput>)>,
     ) -> Result<(), ProofServiceError> {
         let mut pipe = redis::pipe();
         pipe.atomic();
@@ -138,7 +146,7 @@ impl RedisStore {
     pub async fn find_requests_by_status(
         &mut self,
         status: ProofRequestStatus,
-    ) -> Result<Vec<ProofRequestState>, ProofServiceError> {
+    ) -> Result<Vec<ProofRequestState<ProofOutput>>, ProofServiceError> {
         let pattern = format!("{}:state:*", self.key_prefix);
         let finalized_header_key_str = self.finalized_header_key();
 
@@ -175,7 +183,7 @@ impl RedisStore {
                 // Process the results
                 for (i, maybe_json) in state_jsons.into_iter().enumerate() {
                     if let Some(state_json) = maybe_json {
-                        match serde_json::from_str::<ProofRequestState>(&state_json) {
+                        match serde_json::from_str::<ProofRequestState<ProofOutput>>(&state_json) {
                             Ok(state) if state.status == status => {
                                 found_requests.push(state);
                             }
@@ -295,12 +303,16 @@ impl RedisStore {
     }
 }
 
-impl Clone for RedisStore {
+impl<ProofOutput> Clone for RedisStore<ProofOutput>
+where
+    ProofOutput: Clone + Serialize + DeserializeOwned + Send + Sync + 'static,
+{
     fn clone(&self) -> Self {
         Self {
             conn_manager: self.conn_manager.clone(),
             key_prefix: self.key_prefix.clone(),
             global_lock_duration: self.global_lock_duration,
+            _phantom: PhantomData::<ProofOutput>,
         }
     }
 }

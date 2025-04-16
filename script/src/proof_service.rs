@@ -43,7 +43,7 @@ where
 {
     prover_client: Arc<sp1_sdk::EnvProver>,
     proving_key: sp1_sdk::SP1ProvingKey,
-    redis_store: RedisStore,
+    redis_store: RedisStore<B::ProofOutput>,
     // required for storage slot merkle proving
     source_chain_provider: RootProvider<Http<Client>>,
     _phantom: PhantomData<B>,
@@ -57,7 +57,7 @@ where
     pub async fn get_proof(
         &mut self,
         id: &ProofId,
-    ) -> Result<Option<ProofRequestState>, ProofServiceError> {
+    ) -> Result<Option<ProofRequestState<B::ProofOutput>>, ProofServiceError> {
         self.redis_store.get_proof_state(id).await
     }
 

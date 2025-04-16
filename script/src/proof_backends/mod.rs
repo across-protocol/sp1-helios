@@ -3,7 +3,7 @@
 use crate::api::ProofRequest;
 use anyhow::Result;
 use async_trait::async_trait;
-use serde::{Deserialize, Serialize};
+use serde::{de::DeserializeOwned, Serialize};
 
 pub mod sp1;
 
@@ -13,7 +13,7 @@ pub mod sp1;
 /// containing the generated proof data.
 #[async_trait]
 pub trait ProofBackend {
-    type ProofOutput: Serialize + Deserialize<'static> + Send + Sync + 'static;
+    type ProofOutput: Clone + Serialize + DeserializeOwned + Send + Sync + 'static;
 
     /// Asynchronously generates proof data for the given request.
     ///
