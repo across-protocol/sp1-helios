@@ -10,6 +10,7 @@ import {AccessControlEnumerable} from "@openzeppelin/access/extensions/AccessCon
 /// The contract stores the latest verified beacon chain header, execution state root, and sync committee information.
 /// It also provides functionality to verify and store Ethereum storage slot values.
 /// Updater permissions are fixed at contract creation time and cannot be modified afterward.
+/// @custom:security-contact bugs@across.to 
 contract SP1Helios is AccessControlEnumerable {
     /// @notice The genesis validators root for the beacon chain
     bytes32 public immutable GENESIS_VALIDATORS_ROOT;
@@ -50,7 +51,7 @@ contract SP1Helios is AccessControlEnumerable {
     /// @notice Maps from a period to the hash for the sync committee
     mapping(uint256 => bytes32) public syncCommittees;
 
-    /// @notice Maps from (block number, contract, slot) tuple to storage value
+    /// @notice Maps from `computeStorageKey(beaconSlot, contract, storageSlot)` tuple to storage value
     mapping(bytes32 => bytes32) public storageValues;
 
     /// @notice The verification key for the SP1 Helios program
@@ -96,19 +97,33 @@ contract SP1Helios is AccessControlEnumerable {
         address[] updaters;
     }
 
+    /// @notice Emitted when the light client's head is updated to a new finalized beacon chain header.
+    /// @param slot The slot number of the newly finalized head.
+    /// @param root The header root of the newly finalized head.
     event HeadUpdate(uint256 indexed slot, bytes32 indexed root);
 
+    /// @notice Emitted when the sync committee for a specific period is updated.
+    /// @param period The sync committee period number that was updated.
+    /// @param root The hash of the sync committee for the specified period.
     event SyncCommitteeUpdate(uint256 indexed period, bytes32 indexed root);
 
+    /// @notice Emitted when a storage slot's value for a specific contract at a specific head slot has been verified and stored.
+    /// @param head The beacon slot number at which the storage slot value was verified.
+    /// @param key The storage slot key within the contract.
+    /// @param value The verified value of the storage slot.
+    /// @param contractAddress The address of the contract whose storage slot was verified.
     event StorageSlotVerified(
         uint256 indexed head, bytes32 indexed key, bytes32 value, address contractAddress
     );
+
+    /// @notice Emitted during contract initialization when an address is granted the immutable UPDATER_ROLE.
+    /// @param updater The address granted the UPDATER_ROLE.
     event UpdaterAdded(address indexed updater);
 
     error NonIncreasingHead(uint256 slot);
     error SyncCommitteeAlreadySet(uint256 period);
-    error InvalidHeaderRoot(uint256 slot);
-    error InvalidStateRoot(uint256 slot);
+    error NewHeaderMismatch(uint256 slot);
+    error ExecutionStateRootMismatch(uint256 slot);
     error SyncCommitteeStartMismatch(bytes32 given, bytes32 expected);
     error PreviousHeaderNotSet(uint256 slot);
     error PreviousHeaderMismatch(bytes32 given, bytes32 expected);
@@ -194,13 +209,13 @@ contract SP1Helios is AccessControlEnumerable {
         // Verify the proof with the associated public values. This will revert if proof invalid.
         ISP1Verifier(verifier).verifyProof(heliosProgramVkey, publicValues, proof);
 
-        // Check that the new header hasnt been set already.
-        bytes32 storedHeader = headers[po.newHead];
-        if (storedHeader == bytes32(0)) {
+        // If the header has not been set yet, set it. Otherwise, check that po.newHeader matches the stored one
+        bytes32 storedNewHeader = headers[po.newHead];
+        if (storedNewHeader == bytes32(0)) {
             // Set new header
             headers[po.newHead] = po.newHeader;
-        } else if (storedHeader != po.newHeader) {
-            revert InvalidHeaderRoot(po.newHead);
+        } else if (storedNewHeader != po.newHeader) {
+            revert NewHeaderMismatch(po.newHead);
         }
 
         // Update the contract's head if the head slot from the proof outputs is newer.
@@ -209,13 +224,13 @@ contract SP1Helios is AccessControlEnumerable {
             emit HeadUpdate(po.newHead, po.newHeader);
         }
 
-        // Check that the new state root hasnt been set already.
+        // If execution state root has not been set yet, set it. Otherwise, check that po.executionStateRoot matches the stored one
         bytes32 storedExecutionRoot = executionStateRoots[po.newHead];
         if (storedExecutionRoot == bytes32(0)) {
             // Set new state root
             executionStateRoots[po.newHead] = po.executionStateRoot;    
         } else if (storedExecutionRoot != po.executionStateRoot) {
-            revert InvalidStateRoot(po.newHead);
+            revert ExecutionStateRootMismatch(po.newHead);
         }
 
         // Store all provided storage slot values
@@ -284,29 +299,29 @@ contract SP1Helios is AccessControlEnumerable {
 
     /// @notice Computes the key for a contract's storage slot
     /// @dev Creates a unique key for the storage mapping based on block number, contract address, and slot
-    /// @param blockNumber The block number where the storage value was retrieved
+    /// @param beaconSlot The beacon slot number for which the storage slot value was proved
     /// @param contractAddress The address of the contract containing the storage slot
-    /// @param slot The storage slot key
+    /// @param storageSlot The storage slot key
     /// @return A unique key for looking up the storage value
-    function computeStorageKey(uint256 blockNumber, address contractAddress, bytes32 slot)
+    function computeStorageKey(uint256 beaconSlot, address contractAddress, bytes32 storageSlot)
         public
         pure
         returns (bytes32)
     {
-        return keccak256(abi.encodePacked(blockNumber, contractAddress, slot));
+        return keccak256(abi.encodePacked(beaconSlot, contractAddress, storageSlot));
     }
 
     /// @notice Gets the value of a storage slot at a specific block
     /// @dev Looks up storage values that have been verified and stored by this contract
-    /// @param blockNumber The block number where the storage value was retrieved
+    /// @param beaconSlot The beacon slot number for which the storage slot value was proved
     /// @param contractAddress The address of the contract containing the storage slot
-    /// @param slot The storage slot key
+    /// @param storageSlot The storage slot key
     /// @return The value of the storage slot, or zero if not found
-    function getStorageSlot(uint256 blockNumber, address contractAddress, bytes32 slot)
+    function getStorageSlot(uint256 beaconSlot, address contractAddress, bytes32 storageSlot)
         external
         view
         returns (bytes32)
     {
-        return storageValues[computeStorageKey(blockNumber, contractAddress, slot)];
+        return storageValues[computeStorageKey(beaconSlot, contractAddress, storageSlot)];
     }
 }
