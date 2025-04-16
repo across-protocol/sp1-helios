@@ -209,7 +209,7 @@ contract SP1Helios is AccessControlEnumerable {
         // Verify the proof with the associated public values. This will revert if proof invalid.
         ISP1Verifier(verifier).verifyProof(heliosProgramVkey, publicValues, proof);
 
-        // If the header has not yet been set, set it. Otherwise, check that po.newHeader matches the stored one
+        // If the header has not been set yet, set it. Otherwise, check that po.newHeader matches the stored one
         bytes32 storedNewHeader = headers[po.newHead];
         if (storedNewHeader == bytes32(0)) {
             // Set new header
