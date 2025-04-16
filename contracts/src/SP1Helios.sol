@@ -157,7 +157,7 @@ contract SP1Helios is AccessControlEnumerable {
         _setRoleAdmin(UPDATER_ROLE, bytes32(0));
 
         // Add all updaters
-        for (uint256 i = 0; i < params.updaters.length; i++) {
+        for (uint256 i = 0; i < params.updaters.length; ++i) {
             address updater = params.updaters[i];
             if (updater != address(0)) {
                 _grantRole(UPDATER_ROLE, updater);
@@ -234,7 +234,7 @@ contract SP1Helios is AccessControlEnumerable {
         }
 
         // Store all provided storage slot values
-        for (uint256 i = 0; i < po.slots.length; i++) {
+        for (uint256 i = 0; i < po.slots.length; ++i) {
             StorageSlot memory slot = po.slots[i];
             bytes32 storageKey = computeStorageKey(po.newHead, slot.contractAddress, slot.key);
             storageValues[storageKey] = slot.value;
