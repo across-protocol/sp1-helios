@@ -1,6 +1,6 @@
 use crate::{
     proof_service::ProofService,
-    types::{ProofData, ProofId, ProofRequestStatus, ProofServiceError},
+    types::{ProofId, ProofRequestStatus, ProofServiceError, SP1HeliosProofData},
 };
 use alloy_primitives::{Address, B256};
 use alloy_rlp::{RlpDecodable, RlpEncodable};
@@ -101,7 +101,7 @@ pub struct ProofStateResponse {
     pub status: ProofStatusResponse,
     /// Calldata for the update function (only present when status is Success)
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub update_calldata: Option<ProofData>,
+    pub update_calldata: Option<SP1HeliosProofData>,
     /// Error message (only present when status is Errored)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error_message: Option<String>,

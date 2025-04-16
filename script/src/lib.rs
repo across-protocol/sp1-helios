@@ -16,6 +16,7 @@ use std::sync::Arc;
 use tokio::sync::{mpsc::channel, watch};
 use tree_hash::TreeHash;
 pub mod api;
+pub mod proof_backends;
 pub mod proof_service;
 pub mod redis_store;
 pub mod types;

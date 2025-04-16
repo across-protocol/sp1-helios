@@ -2,7 +2,9 @@ use crate::{
     api::ProofRequest,
     redis_store::RedisStore,
     try_get_checkpoint, try_get_client, try_get_latest_checkpoint, try_get_updates,
-    types::{ProofData, ProofId, ProofRequestState, ProofRequestStatus, ProofServiceError},
+    types::{
+        ProofId, ProofRequestState, ProofRequestStatus, ProofServiceError, SP1HeliosProofData,
+    },
     util::CancellationTokenGuard,
 };
 use alloy::{
@@ -584,6 +586,7 @@ impl ProofService {
 
         let updated_proof_state = match zk_proof_result {
             Ok(proof) => {
+                // todo? proof.bytes() correct OR do we need a value from proof.proof ?
                 let proof_hex_string = hex::encode(proof.bytes());
                 let public_values_hex_string = hex::encode(proof.public_values.to_vec());
                 info!(
@@ -593,10 +596,9 @@ impl ProofService {
                 );
                 let mut proof_state = ProofRequestState::new(request.clone());
                 proof_state.status = ProofRequestStatus::Success;
-                proof_state.proof_data = Some(ProofData {
+                proof_state.proof_data = Some(SP1HeliosProofData {
                     proof: proof_hex_string,
                     public_values: public_values_hex_string,
-                    from_head: request.stored_contract_head,
                 });
                 proof_state
             }

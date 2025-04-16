@@ -62,8 +62,9 @@ pub struct ProofRequestState {
     pub request: ProofRequest,
     /// Transaction hash or identifier from the external proof network (e.g., SP1).
     pub proof_network_tx_id: Option<String>,
+    // todo: `proof_data` can be a Json string to be proof backend-agnostic
     /// Final proof data, available only on success.
-    pub proof_data: Option<ProofData>,
+    pub proof_data: Option<SP1HeliosProofData>,
     /// Error message if proof generation failed.
     pub error_message: Option<String>,
 }
@@ -81,16 +82,13 @@ impl ProofRequestState {
     }
 }
 
-/// Data needed to call `SP1Helios.update`
+/// Required calldata for `SP1Helios.update`
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
-pub struct ProofData {
+pub struct SP1HeliosProofData {
     /// Hex string of ZK proof bytes to pass to the update function
     pub proof: String,
     /// Hex string of public values bytes to pass to the update function. Encoded `ProofOutputs`
     pub public_values: String,
-    // todo: to be removed once we update the contracts
-    /// Beacon slot to pass to the update function
-    pub from_head: u64,
 }
 
 /// Errors that can occur within the ProofService.
