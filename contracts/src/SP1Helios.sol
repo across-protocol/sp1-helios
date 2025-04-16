@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-pragma solidity ^0.8.22;
+pragma solidity 0.8.28;
 
 import {ISP1Verifier} from "@sp1-contracts/ISP1Verifier.sol";
 import {AccessControlEnumerable} from "@openzeppelin/access/extensions/AccessControlEnumerable.sol";
