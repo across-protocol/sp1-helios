@@ -62,8 +62,8 @@ pub struct ProofRequestState {
     pub request: ProofRequest,
     /// Transaction hash or identifier from the external proof network (e.g., SP1).
     pub proof_network_tx_id: Option<String>,
-    // todo: `proof_data` can be a Json string to be proof backend-agnostic
     /// Final proof data, available only on success.
+    #[cfg(feature = "sp1-backend")]
     pub proof_data: Option<SP1HeliosProofData>,
     /// Error message if proof generation failed.
     pub error_message: Option<String>,

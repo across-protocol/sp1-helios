@@ -1,4 +1,5 @@
 use log::error;
+use sp1_helios_script::proof_backends::sp1::SP1Backend;
 use std::env;
 
 use sp1_helios_script::api::start_api_server;
@@ -10,7 +11,7 @@ async fn main() -> anyhow::Result<()> {
     dotenv::dotenv().ok();
     env_logger::init();
 
-    let proof_service = ProofService::new().await?;
+    let proof_service = ProofService::<SP1Backend>::new().await?;
 
     // proof_service is a wrapper around DB connection + external zk proof generation service.
     // It's stateless in this way, so it's fine to clone. Redis handles all state

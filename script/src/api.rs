@@ -1,9 +1,13 @@
 use crate::{
+    proof_backends::ProofBackend,
     proof_service::ProofService,
-    types::{ProofId, ProofRequestStatus, ProofServiceError, SP1HeliosProofData},
+    types::{
+        ProofId, ProofRequestState, ProofRequestStatus, ProofServiceError, SP1HeliosProofData,
+    },
 };
 use alloy_primitives::{Address, B256};
 use alloy_rlp::{RlpDecodable, RlpEncodable};
+use async_trait::async_trait;
 use axum::{
     extract::{Path, State},
     http::StatusCode,
@@ -208,10 +212,13 @@ async fn health_handler() -> &'static str {
         (status = 500, description = "Internal server error")
     )
 )]
-async fn request_proof_handler(
-    State(mut service): State<ProofService>,
+async fn request_proof_handler<B>(
+    State(mut service): State<ProofService<B>>,
     Json(api_request): Json<ApiProofRequest>,
-) -> Result<impl IntoResponse, ProofServiceError> {
+) -> Result<impl IntoResponse, ProofServiceError>
+where
+    B: ProofBackend + Clone + Send + Sync + 'static,
+{
     let request = ProofRequest::try_from(api_request)?;
 
     let (proof_id, status) = service.request_proof(request).await?;
@@ -238,10 +245,13 @@ async fn request_proof_handler(
         (status = 500, description = "Internal server error")
     )
 )]
-async fn get_proof_handler(
-    State(mut service): State<ProofService>,
+async fn get_proof_handler<B>(
+    State(mut service): State<ProofService<B>>,
     Path(proof_id_hex): Path<String>,
-) -> Result<impl IntoResponse, ProofServiceError> {
+) -> Result<impl IntoResponse, ProofServiceError>
+where
+    B: ProofBackend + Clone + Send + Sync + 'static,
+{
     let proof_id_bytes = B256::from_str(&proof_id_hex).map_err(|_| {
         ProofServiceError::Internal(format!("Invalid proof ID format: {}", proof_id_hex))
     })?;
@@ -262,8 +272,34 @@ async fn get_proof_handler(
     Ok((StatusCode::OK, Json(response_state)))
 }
 
+// --- API Service Trait --- //
+
+/// Defines the interface for the proof service exposed via the API.
+/// This allows the API layer to be decoupled from the concrete ProofService implementation.
+#[async_trait]
+pub trait ApiProofService: Clone + Send + Sync + 'static {
+    /// Associated type for the specific proof output format produced by the backend.
+    /// This type must be serializable/deserializable, thread-safe, and cloneable.
+    /// It determines the structure of the `update_calldata` field when successful.
+    // type ProofOutput: Serialize + Deserialize<'static> + Send + Sync + Clone + 'static;
+
+    /// Retrieves the current state of a proof request by its ID.
+    async fn get_proof(&self, id: &ProofId)
+        -> Result<Option<ProofRequestState>, ProofServiceError>;
+
+    /// Submits a new request for proof generation.
+    /// Returns the ProofId and the initial status (e.g., Pending).
+    async fn request_proof(
+        &self,
+        request: ProofRequest,
+    ) -> Result<(ProofId, ProofRequestStatus), ProofServiceError>;
+}
+
 /// Create and configure the API router
-fn create_api_router(proof_service: ProofService) -> Router {
+fn create_api_router<B>(proof_service: ProofService<B>) -> Router
+where
+    B: ProofBackend + Clone + Send + Sync + 'static,
+{
     Router::new()
         .route("/health", get(health_handler))
         .route("/api/proofs", post(request_proof_handler))
@@ -273,7 +309,10 @@ fn create_api_router(proof_service: ProofService) -> Router {
 }
 
 /// Start the API server
-pub async fn start_api_server(proof_service: ProofService) -> JoinHandle<()> {
+pub async fn start_api_server<B>(proof_service: ProofService<B>) -> JoinHandle<()>
+where
+    B: ProofBackend + Clone + Send + Sync + 'static,
+{
     // Ensure environment variables are loaded
     dotenv::dotenv().ok();
 

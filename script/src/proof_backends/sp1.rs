@@ -235,7 +235,8 @@ impl SP1Backend {
 }
 
 #[async_trait]
-impl ProofBackend<SP1HeliosProofData> for SP1Backend {
+impl ProofBackend for SP1Backend {
+    type ProofOutput = SP1HeliosProofData;
     /// Asynchronously generates SP1 proof data based on the provided request details.
     ///
     /// This involves building the necessary inputs (fetching data from consensus/execution clients)

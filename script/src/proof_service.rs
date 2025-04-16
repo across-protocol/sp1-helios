@@ -1,5 +1,6 @@
 use crate::{
     api::ProofRequest,
+    proof_backends::ProofBackend,
     redis_store::RedisStore,
     try_get_checkpoint, try_get_client, try_get_latest_checkpoint, try_get_updates,
     types::{
@@ -23,8 +24,8 @@ use log::{debug, error, info, warn};
 use reqwest::{Client, Url};
 use sp1_helios_primitives::types::{ContractStorage, ProofInputs, StorageSlot};
 use sp1_sdk::SP1Stdin;
-use std::time::Duration;
 use std::{env, sync::Arc};
+use std::{marker::PhantomData, time::Duration};
 use tokio::time::{interval_at, Instant};
 use tokio_util::sync::CancellationToken;
 
@@ -36,16 +37,23 @@ const ORPHANED_PROOF_LOCK_ACQUIRE_DURATION_MS: u64 = 1000;
 /// It uses Redis for state management and locking, and interacts with an
 /// external asynchronous function to trigger the actual proof computation.
 #[derive(Clone)]
-pub struct ProofService {
+pub struct ProofService<B>
+where
+    B: ProofBackend + Clone + Send + Sync + 'static,
+{
     prover_client: Arc<sp1_sdk::EnvProver>,
     proving_key: sp1_sdk::SP1ProvingKey,
     redis_store: RedisStore,
     // required for storage slot merkle proving
     source_chain_provider: RootProvider<Http<Client>>,
+    _phantom: PhantomData<B>,
 }
 
 // --- API-facing functionality of ProofService ---
-impl ProofService {
+impl<B> ProofService<B>
+where
+    B: ProofBackend + Clone + Send + Sync,
+{
     pub async fn get_proof(
         &mut self,
         id: &ProofId,
@@ -322,7 +330,10 @@ impl ProofService {
 }
 
 // --- Runtime logic required for proof generation ---
-impl ProofService {
+impl<B> ProofService<B>
+where
+    B: ProofBackend + Clone + Send + Sync,
+{
     /// Initialize a new ProofService with configuration from environment variables
     pub async fn new() -> anyhow::Result<Self> {
         // Ensure environment variables are loaded
@@ -348,6 +359,7 @@ impl ProofService {
             proving_key,
             redis_store,
             source_chain_provider,
+            _phantom: PhantomData::<B> {},
         };
 
         info!(target: "proof_service::init", "ProofService initialized successfully.");
@@ -432,7 +444,7 @@ impl ProofService {
     /// Executes the ZK proof generation process for a given request.
     async fn execute_proof_generation(
         request: ProofRequest,
-        mut proof_service: ProofService,
+        mut proof_service: ProofService<B>,
         proof_id: ProofId,
     ) {
         // At this point, this function has exclusive control over this proof_id

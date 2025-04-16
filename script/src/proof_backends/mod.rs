@@ -12,13 +12,9 @@ pub mod sp1;
 /// Implementors take a [`ProofRequest`] and produce a serializable `ProofOutput`
 /// containing the generated proof data.
 #[async_trait]
-pub trait ProofBackend<ProofOutput>
-where
-    // `ProofOutput` bounds:
-    // - `Serialize + Deserialize<'static> + 'static`: For data ownership and storage (e.g., Redis).
-    // - `Send + Sync`: Required for async/thread safety.
-    ProofOutput: Serialize + Deserialize<'static> + Send + Sync + 'static,
-{
+pub trait ProofBackend {
+    type ProofOutput: Serialize + Deserialize<'static> + Send + Sync + 'static;
+
     /// Asynchronously generates proof data for the given request.
     ///
     /// # Arguments
@@ -28,5 +24,5 @@ where
     /// # Returns
     ///
     /// The generated `ProofOutput` on success, or an error on failure.
-    async fn generate_proof(&self, request: ProofRequest) -> Result<ProofOutput>;
+    async fn generate_proof(&self, request: ProofRequest) -> Result<Self::ProofOutput>;
 }
