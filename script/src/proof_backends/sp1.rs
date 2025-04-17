@@ -8,7 +8,8 @@ use crate::{
     types::SP1HeliosProofData, // Concrete ProofOutput type
 };
 use alloy::{
-    providers::{Provider, RootProvider},
+    network::Ethereum,
+    providers::{Provider, ProviderBuilder, RootProvider},
     transports::http::Http,
 };
 use alloy_primitives::hex;
@@ -17,10 +18,10 @@ use async_trait::async_trait;
 use helios_consensus_core::{consensus_spec::MainnetConsensusSpec, types::FinalityUpdate};
 use helios_ethereum::rpc::ConsensusRpc;
 use log::{debug, error, info, warn};
-use reqwest::Client;
+use reqwest::{Client, Url};
 use sp1_helios_primitives::types::{ContractStorage, ProofInputs, StorageSlot};
 use sp1_sdk::{EnvProver, ProverClient, SP1ProofWithPublicValues, SP1ProvingKey, SP1Stdin};
-use std::{sync::Arc, time::Duration};
+use std::{env, sync::Arc, time::Duration};
 use tokio::time::sleep;
 
 use super::ProofBackend;
@@ -52,6 +53,22 @@ pub struct SP1Backend {
 }
 
 impl SP1Backend {
+    // todo: can improve env configurability here
+    pub fn from_env() -> Result<Self> {
+        dotenv::dotenv().ok();
+
+        let source_execution_rpc_url: Url = env::var("SOURCE_EXECUTION_RPC_URL")
+            .context("SOURCE_EXECUTION_RPC_URL not set")?
+            .parse()
+            .context("Failed to parse SOURCE_EXECUTION_RPC_URL")?;
+
+        let source_chain_provider = ProviderBuilder::new()
+            .network::<Ethereum>()
+            .on_http(source_execution_rpc_url);
+
+        Self::new(source_chain_provider, None)
+    }
+
     /// Creates a new SP1Backend instance, initializing prover client and keys from environment.
     pub fn new(
         source_chain_provider: RootProvider<Http<Client>>,
@@ -195,7 +212,7 @@ impl SP1Backend {
     /// Runs the SP1 prover in a blocking thread.
     async fn run_sp1_prover(&self, stdin: SP1Stdin) -> Result<SP1ProofWithPublicValues> {
         let prover_client = self.prover_client.clone();
-        let proving_key = self.proving_key.clone(); // SP1ProvingKey likely needs Clone
+        let proving_key = self.proving_key.clone();
 
         debug!(target: "sp1_backend::prove", "Spawning blocking task for SP1 proof generation.");
         // Execute the potentially long-running prover logic in a blocking thread
@@ -204,6 +221,7 @@ impl SP1Backend {
         })
         .await;
 
+        // todo: Is this meaningful error handling? I feel like we should only have 1 error arm. Flatten errors?
         match result {
             Ok(Ok(proof)) => {
                 debug!(target: "sp1_backend::prove", "Successfully generated SP1 proof.");
@@ -221,7 +239,7 @@ impl SP1Backend {
     }
 
     /// Formats the raw prover output into the target `SP1HeliosProofData`.
-    fn format_output(&self, proof_with_values: SP1ProofWithPublicValues) -> SP1HeliosProofData {
+    fn format_output(proof_with_values: SP1ProofWithPublicValues) -> SP1HeliosProofData {
         // Extract proof bytes and public values, then hex-encode them
         let proof_hex_string = hex::encode(proof_with_values.bytes());
         let public_values_hex_string = hex::encode(proof_with_values.public_values.to_vec());
@@ -255,7 +273,7 @@ impl ProofBackend for SP1Backend {
             .context("Failed to run SP1 prover")?;
 
         // 3. Format Output
-        let output = self.format_output(proof_with_values);
+        let output = Self::format_output(proof_with_values);
 
         Ok(output)
     }

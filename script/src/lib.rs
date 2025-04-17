@@ -19,6 +19,7 @@ pub mod api;
 pub mod proof_backends;
 pub mod proof_service;
 pub mod redis_store;
+pub mod rpc_proxies;
 pub mod types;
 pub mod util;
 

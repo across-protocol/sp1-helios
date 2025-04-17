@@ -24,5 +24,10 @@ pub trait ProofBackend {
     /// # Returns
     ///
     /// The generated `ProofOutput` on success, or an error on failure.
+    // todo: this might be giving ProofBackend more responsibility than needed. E.g. we shouldn't be
+    // todo: making RPC calls to consensus / execution layer from the ProofBackend. It should happen
+    // todo: on the ProofService level. This fn could instead be smth like:
+    // todo: `async fn generate_proof(&self, inputs: ProofInputs) -> Result<Self::ProofOutput>`
+    // todo: Oh well.
     async fn generate_proof(&self, request: ProofRequest) -> Result<Self::ProofOutput>;
 }

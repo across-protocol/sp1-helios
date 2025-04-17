@@ -2,34 +2,19 @@ use crate::{
     api::ProofRequest,
     proof_backends::ProofBackend,
     redis_store::RedisStore,
-    try_get_checkpoint, try_get_client, try_get_latest_checkpoint, try_get_updates,
-    types::{
-        ProofId, ProofRequestState, ProofRequestStatus, ProofServiceError, SP1HeliosProofData,
-    },
+    try_get_client, try_get_latest_checkpoint,
+    types::{ProofId, ProofRequestState, ProofRequestStatus, ProofServiceError},
     util::CancellationTokenGuard,
 };
-use alloy::{
-    network::Ethereum,
-    providers::{Provider, ProviderBuilder, RootProvider},
-    transports::{http::Http, BoxFuture},
-};
-use alloy_primitives::hex;
-use anyhow::{anyhow, Context, Result};
-use helios_consensus_core::{
-    consensus_spec::MainnetConsensusSpec,
-    types::{FinalityUpdate, LightClientHeader},
-};
-use helios_ethereum::rpc::ConsensusRpc;
+use alloy::transports::BoxFuture;
+use anyhow::Result;
+use helios_consensus_core::types::LightClientHeader;
+
 use log::{debug, error, info, warn};
-use reqwest::{Client, Url};
-use sp1_helios_primitives::types::{ContractStorage, ProofInputs, StorageSlot};
-use sp1_sdk::SP1Stdin;
-use std::{env, sync::Arc};
-use std::{marker::PhantomData, time::Duration};
+use std::time::Duration;
 use tokio::time::{interval_at, Instant};
 use tokio_util::sync::CancellationToken;
 
-const ELF: &[u8] = include_bytes!("../../elf/sp1-helios-elf");
 const ORPHANED_PROOF_LOCK_ACQUIRE_DURATION_MS: u64 = 1000;
 
 /// Service responsible for managing the lifecycle of ZK proof generation requests.
@@ -41,12 +26,8 @@ pub struct ProofService<B>
 where
     B: ProofBackend + Clone + Send + Sync + 'static,
 {
-    prover_client: Arc<sp1_sdk::EnvProver>,
-    proving_key: sp1_sdk::SP1ProvingKey,
+    proof_backend: B,
     redis_store: RedisStore<B::ProofOutput>,
-    // required for storage slot merkle proving
-    source_chain_provider: RootProvider<Http<Client>>,
-    _phantom: PhantomData<B>,
 }
 
 // --- API-facing functionality of ProofService ---
@@ -171,7 +152,7 @@ where
                     // Lock acquired, spawn generation task.
                     // The spawned task now receives the proof_id, not the lock_key.
                     tokio::spawn(async move {
-                        Self::execute_proof_generation(
+                        Self::generate_and_store_proof(
                             request,
                             proof_service_clone,
                             proof_id, // Pass proof_id
@@ -296,7 +277,7 @@ where
                 {
                     Ok(true) => {
                         tokio::spawn(async move {
-                            Self::execute_proof_generation(
+                            Self::generate_and_store_proof(
                                 request,
                                 proof_service_clone,
                                 proof_id, // Pass proof_id
@@ -335,31 +316,13 @@ where
     B: ProofBackend + Clone + Send + Sync,
 {
     /// Initialize a new ProofService with configuration from environment variables
-    pub async fn new() -> anyhow::Result<Self> {
-        // Ensure environment variables are loaded
-        dotenv::dotenv().ok();
-
-        let source_execution_rpc_url: Url = env::var("SOURCE_EXECUTION_RPC_URL")
-            .context("SOURCE_EXECUTION_RPC_URL not set")?
-            .parse()
-            .context("Failed to parse SOURCE_EXECUTION_RPC_URL")?;
-
-        let source_chain_provider = ProviderBuilder::new()
-            .network::<Ethereum>()
-            .on_http(source_execution_rpc_url);
-
+    pub async fn new(proof_backend: B) -> anyhow::Result<Self> {
         // Initialize RedisStore
         let redis_store = RedisStore::new().await?;
 
-        let prover_client = sp1_sdk::ProverClient::from_env();
-        let (proving_key, _) = prover_client.setup(ELF);
-
         let service = Self {
-            prover_client: Arc::new(prover_client),
-            proving_key,
+            proof_backend,
             redis_store,
-            source_chain_provider,
-            _phantom: PhantomData::<B> {},
         };
 
         info!(target: "proof_service::init", "ProofService initialized successfully.");
@@ -441,8 +404,7 @@ where
         }
     }
 
-    /// Executes the ZK proof generation process for a given request.
-    async fn execute_proof_generation(
+    async fn generate_and_store_proof(
         request: ProofRequest,
         mut proof_service: ProofService<B>,
         proof_id: ProofId,
@@ -490,128 +452,15 @@ where
             }
         });
 
-        // todo? Move these to some kind of config file
-        let max_tries_to_setup_input = 3;
-        let sleep_duration_between_retries = 12; // one slot
-        let mut attempt = 0;
-        // todo: make a function out of this. There's too much code here
-        let stdin: anyhow::Result<SP1Stdin> = loop {
-            attempt += 1;
-            match async {
-                // Fetch the checkpoint at requested slot
-                let checkpoint = try_get_checkpoint(request.stored_contract_head).await?;
-
-                // Get the client from the checkpoint, will bootstrap a client with checkpoint
-                // todo: does this type of bootstrapping guarantee valid RPC output? I.e., will the client
-                // todo: have 100% correct data after this call?
-                let client = try_get_client(checkpoint).await?;
-                let sync_committee_updates = try_get_updates(&client).await?;
-                let finality_update: FinalityUpdate<MainnetConsensusSpec> = client
-                    .rpc
-                    .get_finality_update()
-                    .await
-                    .map_err(|e| anyhow!("{}", e))?;
-                let latest_finalized_header = finality_update.finalized_header();
-                let expected_current_slot = client.expected_current_slot();
-                let latest_finalized_execution_header = latest_finalized_header
-                    .execution()
-                    .map_err(|_| anyhow::anyhow!("No execution header in finality update"))?;
-                let proof = proof_service
-                    .source_chain_provider
-                    .get_proof(request.hub_pool_address, vec![request.storage_slot])
-                    .block_id((*latest_finalized_execution_header.block_number()).into())
-                    .await?;
-                let mut stdin = SP1Stdin::new();
-                let storage_slot = StorageSlot {
-                    key: request.storage_slot,
-                    expected_value: proof.storage_proof[0].value,
-                    mpt_proof: proof.storage_proof[0].proof.clone(),
-                };
-                let inputs = ProofInputs {
-                    sync_committee_updates,
-                    finality_update,
-                    expected_current_slot,
-                    store: client.store.clone(),
-                    genesis_root: client.config.chain.genesis_root,
-                    forks: client.config.forks.clone(),
-                    contract_storage_slots: ContractStorage {
-                        address: proof.address,
-                        expected_value: alloy_trie::TrieAccount {
-                            nonce: proof.nonce,
-                            balance: proof.balance,
-                            storage_root: proof.storage_hash,
-                            code_hash: proof.code_hash,
-                        },
-                        mpt_proof: proof.account_proof,
-                        storage_slots: vec![storage_slot],
-                    },
-                };
-                let encoded_proof_inputs = serde_cbor::to_vec(&inputs)?;
-                stdin.write_slice(&encoded_proof_inputs);
-                anyhow::Ok(stdin)
-            }
-            .await
-            {
-                Ok(stdin) => break Ok(stdin),
-                Err(e) => {
-                    warn!(
-                        target: "proof_service::generate",
-                        "[ProofID: {}] Failed to setup proof inputs (attempt {}/{}): {}",
-                        proof_id.to_hex_string(),
-                        attempt + 1,
-                        max_tries_to_setup_input,
-                        e
-                    );
-                    // Sleep for 12 seconds before retrying
-                    tokio::time::sleep(tokio::time::Duration::from_secs(
-                        sleep_duration_between_retries,
-                    ))
-                    .await;
-                    if attempt == max_tries_to_setup_input - 1 {
-                        error!(target: "proof_service::generate", "[ProofID: {}] All {} attempts to setup proof inputs failed.", proof_id.to_hex_string(), max_tries_to_setup_input);
-                        break Err(anyhow!(
-                            "[ProofID: {}] Final attempt to setup proof inputs failed: {}",
-                            proof_id.to_hex_string(),
-                            e
-                        ));
-                    }
-                }
-            }
-        };
-
-        let zk_proof_result = match stdin {
-            Ok(valid_stdin) => {
-                let proving_key = proof_service.proving_key.clone();
-                let prover_client = proof_service.prover_client.clone();
-                tokio::task::spawn_blocking(move || {
-                    prover_client
-                        .prove(&proving_key, &valid_stdin)
-                        .groth16()
-                        .run()
-                })
-                .await
-                .map_err(|join_err| anyhow!("Spawned proof generation task failed: {}", join_err))
-                .and_then(|res| res) // Flatten Result<Result<_, _>, _> to Result<_, _>
-            }
-            Err(e) => Err(e), // Stdin setup failed
-        };
-
-        let updated_proof_state = match zk_proof_result {
-            Ok(proof) => {
-                // todo? proof.bytes() correct OR do we need a value from proof.proof ?
-                let proof_hex_string = hex::encode(proof.bytes());
-                let public_values_hex_string = hex::encode(proof.public_values.to_vec());
-                info!(
-                    target: "proof_service::generate",
-                    "[ProofID: {}] Proof generated successfully. Storing in Redis.",
-                    proof_id.to_hex_string()
-                );
+        let proof_output = proof_service
+            .proof_backend
+            .generate_proof(request.clone())
+            .await;
+        let updated_proof_state = match proof_output {
+            Ok(proof_output) => {
                 let mut proof_state = ProofRequestState::new(request.clone());
                 proof_state.status = ProofRequestStatus::Success;
-                proof_state.proof_data = Some(SP1HeliosProofData {
-                    proof: proof_hex_string,
-                    public_values: public_values_hex_string,
-                });
+                proof_state.proof_data = Some(proof_output);
                 proof_state
             }
             Err(e) => {
@@ -650,7 +499,8 @@ where
                         retry_count,
                         e
                     );
-                    // todo: Consider adding a max retry limit
+                    // todo? Consider adding a max retry limit. But then do what? Abandon this task? Because it's either abandon
+                    // and leave at ::Generating in Redis, which is bad, or retry forever
                     tokio::time::sleep(std::time::Duration::from_secs(1)).await;
                 }
             }
@@ -716,7 +566,7 @@ where
                     // Spawn a new worker for this task.
                     let proof_service_clone = self.clone();
                     tokio::spawn(async move {
-                        Self::execute_proof_generation(
+                        Self::generate_and_store_proof(
                             proof_state.request,
                             proof_service_clone,
                             proof_id,
