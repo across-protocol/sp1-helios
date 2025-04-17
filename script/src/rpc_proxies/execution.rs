@@ -7,10 +7,10 @@ use alloy::{
 };
 use alloy_primitives::{Address, B256};
 use anyhow::anyhow;
-use anyhow::{Context, Error, Result};
+use anyhow::{Context, Result};
 use log::warn;
 use reqwest::{Client, Url};
-use std::{env, time::Duration};
+use std::{env, future::Future, time::Duration};
 
 struct Provider {
     name: String,
@@ -70,6 +70,110 @@ impl ProviderProxy {
         Self { providers }
     }
 
+    /// Generic helper to perform a request against all providers concurrently and return the first
+    /// successful response within a timeout.
+    async fn _proxy_request_try_once<R, F, Fut>(
+        &self,
+        timeout_duration: Duration,
+        f: F,
+    ) -> Result<R>
+    where
+        R: Send + 'static,
+        F: Fn(RootProvider<Http<Client>>) -> Fut + Send + Sync + Clone + 'static,
+        Fut: Future<Output = Result<R>> + Send + 'static,
+    {
+        if self.providers.is_empty() {
+            return Err(anyhow!("No execution providers configured."));
+        }
+
+        let (tx, mut rx) = tokio::sync::mpsc::channel::<Result<R>>(self.providers.len());
+
+        for provider in &self.providers {
+            let provider_clone = provider.provider.clone();
+            let f_clone = f.clone();
+            let tx_clone = tx.clone();
+            let provider_name = provider.name.clone();
+
+            tokio::spawn(async move {
+                let result = f_clone(provider_clone).await;
+                if let Err(e) = &result {
+                    warn!(target: "ProviderProxy::_proxy_request_try_once", "Provider '{}' failed: {}", provider_name, e);
+                }
+                // todo: this should never error. Should I unwrap?
+                let _ = tx_clone.try_send(result);
+            });
+        }
+
+        // Drop last active `tx`
+        drop(tx);
+
+        match tokio::time::timeout(timeout_duration, async {
+            while let Some(result) = rx.recv().await {
+                match result {
+                    Ok(value) => return Ok(value), // Return the first successful result
+                    Err(_) => { /* Error already logged in the spawn, continue waiting */ }
+                }
+            }
+            // All providers failed without success
+            Err(anyhow!(
+                "All providers failed to return a successful response."
+            ))
+        })
+        .await
+        {
+            Ok(Ok(result)) => Ok(result), // Inner op succeeded
+            Ok(Err(e)) => Err(e),         // Inner op failed (all providers failed)
+            Err(_) => {
+                // Timeout occurred
+                Err(anyhow!("Request timed out after {:?}", timeout_duration))
+            }
+        }
+    }
+
+    /// Generic helper to perform a request with retries.
+    async fn _proxy_request_with_retries<R, F, Fut>(
+        &self,
+        operation_name: &str, // For logging purposes
+        retries: Option<usize>,
+        timeout_duration: Option<Duration>,
+        retry_delay: Duration,
+        f: F,
+    ) -> Result<R>
+    where
+        R: Send + 'static,
+        F: Fn(RootProvider<Http<Client>>) -> Fut + Send + Sync + Clone + 'static,
+        Fut: Future<Output = Result<R>> + Send + 'static,
+    {
+        let max_retries = retries.unwrap_or(1).max(1);
+        let request_timeout = timeout_duration.unwrap_or(Duration::from_secs(10));
+
+        for attempt in 1..=max_retries {
+            let f_clone = f.clone();
+            match self._proxy_request_try_once(request_timeout, f_clone).await {
+                Ok(result) => return Ok(result),
+                Err(e) => {
+                    // Log the error for this attempt
+                    warn!(
+                        target: "ProviderProxy::_proxy_request_with_retries",
+                        "Operation '{}' attempt {}/{} failed: {}",
+                        operation_name, attempt, max_retries, e
+                    );
+
+                    if attempt < max_retries {
+                        tokio::time::sleep(retry_delay).await;
+                    }
+                }
+            }
+        }
+
+        // All attempts failed
+        Err(anyhow!(
+            "Operation '{}' failed after {} attempts.",
+            operation_name,
+            max_retries
+        ))
+    }
+
     /// Fetches an Ethereum storage proof (`EIP1186AccountProofResponse`) from the configured providers
     /// with retry and timeout logic.
     pub async fn get_proof(
@@ -80,109 +184,27 @@ impl ProviderProxy {
         retries: Option<usize>,
         timeout_duration: Option<Duration>,
     ) -> Result<EIP1186AccountProofResponse> {
-        let max_retries = retries.unwrap_or(1);
-        let request_timeout = timeout_duration.unwrap_or(Duration::from_secs(10));
-        let retry_delay = Duration::from_secs(1); // Fixed 1-second delay
+        let operation_name = "get_proof";
+        let retry_delay = Duration::from_secs(1);
 
-        if self.providers.is_empty() {
-            return Err(anyhow!("No execution providers configured."));
-        }
-
-        let mut last_errors: Vec<(String, Error)> = vec![];
-
-        for attempt in 1..=max_retries {
-            match self
-                .get_proof_try_once(address, slots.clone(), block_id, Some(request_timeout))
-                .await
-            {
-                Ok(proof) => return Ok(proof),
-                Err(e) => {
-                    warn!(
-                        target: "ProviderProxy::get_proof",
-                        "Attempt {}/{} failed: {}",
-                        attempt, max_retries, e
-                    );
-                    last_errors.push(("get_proof_try_once".to_string(), e));
-
-                    // Don't sleep after the last attempt
-                    if attempt < max_retries {
-                        tokio::time::sleep(retry_delay).await;
-                    }
-                }
-            }
-        }
-
-        Err(anyhow!(
-            "All {} attempts to get proof failed. Last errors: {:?}",
-            max_retries,
-            last_errors
-        ))
-    }
-
-    async fn get_proof_try_once(
-        &self,
-        address: Address,
-        slots: Vec<B256>,
-        block_id: Option<BlockId>,
-        timeout_duration: Option<Duration>,
-    ) -> Result<EIP1186AccountProofResponse> {
-        let (tx, mut rx) =
-            tokio::sync::mpsc::channel::<Result<EIP1186AccountProofResponse>>(self.providers.len());
-        for provider in &self.providers {
-            let root_provider = provider.provider.clone();
+        let request_closure = move |provider: RootProvider<Http<Client>>| {
             let keys = slots.clone();
-            let tx = tx.clone();
-
-            tokio::spawn(async move {
+            async move {
                 let result = match block_id {
-                    Some(block_id) => root_provider.get_proof(address, keys).block_id(block_id),
-                    None => root_provider.get_proof(address, keys),
-                }
-                .await
-                .map_err(|e| anyhow!("RPC error {}", e));
-                // todo: this should never error. We ignore this for now
-                let _ = tx.try_send(result);
-            });
-        }
-
-        // Drop the original sender to avoid keeping the channel open
-        drop(tx);
-
-        let timeout = timeout_duration.unwrap_or(Duration::from_secs(10));
-        let mut errors = Vec::new();
-
-        // Use tokio::time::timeout to enforce a timeout on the entire operation
-        match tokio::time::timeout(timeout, async {
-            // Process responses as they arrive
-            while let Some(result) = rx.recv().await {
-                match result {
-                    Ok(proof) => return Ok(proof),
-                    Err(e) => errors.push(e),
-                }
+                    Some(id) => provider.get_proof(address, keys).block_id(id).await,
+                    None => provider.get_proof(address, keys).await,
+                };
+                result.map_err(|e| anyhow!("RPC error from provider: {}", e))
             }
+        };
 
-            // If we get here, all senders have dropped without sending a successful response
-            Err(anyhow!(
-                "All providers failed to return a valid proof: {}",
-                errors
-                    .iter()
-                    .map(|e| e.to_string())
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            ))
-        })
+        self._proxy_request_with_retries(
+            operation_name,
+            retries,
+            timeout_duration,
+            retry_delay,
+            request_closure,
+        )
         .await
-        {
-            Ok(result) => result,
-            Err(_) => Err(anyhow!(
-                "Proof request timed out after {:?}. Accumulated errors: {}",
-                timeout,
-                errors
-                    .iter()
-                    .map(|e| e.to_string())
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            )),
-        }
     }
 }
