@@ -12,22 +12,26 @@ use log::warn;
 use reqwest::{Client, Url};
 use std::{env, future::Future, time::Duration};
 
+#[derive(Clone)]
 struct Provider {
     name: String,
     provider: RootProvider<Http<Client>>,
 }
 
+#[derive(Clone)]
 pub struct ProviderProxy {
     providers: Vec<Provider>,
 }
 
+// todo? Using these hardcoded .env vars. OK?
 const ENV_VAR_NAMES: &[&str] = &[
     "SOURCE_EXECUTION_RPC_URL",
     "SOURCE_EXECUTION_RPC_URL_BACKUP_0",
     "SOURCE_EXECUTION_RPC_URL_BACKUP_1",
 ];
+
+// Public interface
 impl ProviderProxy {
-    // todo? This function uses hardcoded env var names specific to this package
     #[must_use]
     pub fn from_env() -> Self {
         dotenv::dotenv().ok();
@@ -70,6 +74,43 @@ impl ProviderProxy {
         Self { providers }
     }
 
+    /// Fetches an Ethereum storage proof (`EIP1186AccountProofResponse`) from the configured providers
+    /// with retry and timeout logic.
+    pub async fn get_proof(
+        &self,
+        address: Address,
+        slots: Vec<B256>,
+        block_id: Option<BlockId>,
+        retries: Option<usize>,
+        timeout_duration: Option<Duration>,
+    ) -> Result<EIP1186AccountProofResponse> {
+        let operation_name = "get_proof";
+        let retry_delay = Duration::from_secs(1);
+
+        let request_closure = move |provider: RootProvider<Http<Client>>| {
+            let keys = slots.clone();
+            async move {
+                let result = match block_id {
+                    Some(id) => provider.get_proof(address, keys).block_id(id).await,
+                    None => provider.get_proof(address, keys).await,
+                };
+                result.map_err(|e| anyhow!("RPC error from provider: {}", e))
+            }
+        };
+
+        self._proxy_request_with_retries(
+            operation_name,
+            retries,
+            timeout_duration,
+            retry_delay,
+            request_closure,
+        )
+        .await
+    }
+}
+
+// todo? For now, returning the result that's arrived first. Could change this to a quorum-based solution
+impl ProviderProxy {
     /// Generic helper to perform a request against all providers concurrently and return the first
     /// successful response within a timeout.
     async fn _proxy_request_try_once<R, F, Fut>(
@@ -172,39 +213,5 @@ impl ProviderProxy {
             operation_name,
             max_retries
         ))
-    }
-
-    /// Fetches an Ethereum storage proof (`EIP1186AccountProofResponse`) from the configured providers
-    /// with retry and timeout logic.
-    pub async fn get_proof(
-        &self,
-        address: Address,
-        slots: Vec<B256>,
-        block_id: Option<BlockId>,
-        retries: Option<usize>,
-        timeout_duration: Option<Duration>,
-    ) -> Result<EIP1186AccountProofResponse> {
-        let operation_name = "get_proof";
-        let retry_delay = Duration::from_secs(1);
-
-        let request_closure = move |provider: RootProvider<Http<Client>>| {
-            let keys = slots.clone();
-            async move {
-                let result = match block_id {
-                    Some(id) => provider.get_proof(address, keys).block_id(id).await,
-                    None => provider.get_proof(address, keys).await,
-                };
-                result.map_err(|e| anyhow!("RPC error from provider: {}", e))
-            }
-        };
-
-        self._proxy_request_with_retries(
-            operation_name,
-            retries,
-            timeout_duration,
-            retry_delay,
-            request_closure,
-        )
-        .await
     }
 }

@@ -2,15 +2,11 @@
 
 use crate::{
     api::ProofRequest,
+    rpc_proxies::execution::ProviderProxy,
     try_get_checkpoint,
     try_get_client,
     try_get_updates,
     types::SP1HeliosProofData, // Concrete ProofOutput type
-};
-use alloy::{
-    network::Ethereum,
-    providers::{Provider, ProviderBuilder, RootProvider},
-    transports::http::Http,
 };
 use alloy_primitives::hex;
 use anyhow::{anyhow, Context, Result};
@@ -18,10 +14,9 @@ use async_trait::async_trait;
 use helios_consensus_core::{consensus_spec::MainnetConsensusSpec, types::FinalityUpdate};
 use helios_ethereum::rpc::ConsensusRpc;
 use log::{debug, error, info, warn};
-use reqwest::{Client, Url};
 use sp1_helios_primitives::types::{ContractStorage, ProofInputs, StorageSlot};
 use sp1_sdk::{EnvProver, ProverClient, SP1ProofWithPublicValues, SP1ProvingKey, SP1Stdin};
-use std::{env, sync::Arc, time::Duration};
+use std::{sync::Arc, time::Duration};
 use tokio::time::sleep;
 
 use super::ProofBackend;
@@ -46,7 +41,7 @@ impl Default for SP1BackendConfig {
 /// An implementation of `ProofBackend` using the SP1 prover.
 #[derive(Clone)]
 pub struct SP1Backend {
-    source_chain_provider: RootProvider<Http<Client>>,
+    execution_rpc_proxy: ProviderProxy,
     prover_client: Arc<EnvProver>,
     proving_key: SP1ProvingKey,
     config: SP1BackendConfig,
@@ -57,21 +52,16 @@ impl SP1Backend {
     pub fn from_env() -> Result<Self> {
         dotenv::dotenv().ok();
 
-        let source_execution_rpc_url: Url = env::var("SOURCE_EXECUTION_RPC_URL")
-            .context("SOURCE_EXECUTION_RPC_URL not set")?
-            .parse()
-            .context("Failed to parse SOURCE_EXECUTION_RPC_URL")?;
+        // Create the ProviderProxy from environment variables
+        let source_chain_proxy = ProviderProxy::from_env();
 
-        let source_chain_provider = ProviderBuilder::new()
-            .network::<Ethereum>()
-            .on_http(source_execution_rpc_url);
-
-        Self::new(source_chain_provider, None)
+        // Pass the proxy to the constructor
+        Self::new(source_chain_proxy, None)
     }
 
     /// Creates a new SP1Backend instance, initializing prover client and keys from environment.
     pub fn new(
-        source_chain_provider: RootProvider<Http<Client>>,
+        source_chain_proxy: ProviderProxy,
         config: Option<SP1BackendConfig>,
     ) -> Result<Self> {
         info!(target: "sp1_backend::init", "Initializing SP1Backend...");
@@ -87,7 +77,7 @@ impl SP1Backend {
         info!(target: "sp1_backend::init", "SP1 keys setup complete.");
 
         Ok(Self {
-            source_chain_provider,
+            execution_rpc_proxy: source_chain_proxy,
             prover_client,
             proving_key: pk,
             config: config.unwrap_or_default(),
@@ -157,12 +147,18 @@ impl SP1Backend {
         let block_id = (*latest_finalized_execution_header.block_number()).into();
         debug!(target: "sp1_backend::input", "Fetching storage proof for address {} slot {} at block ID {:?}", request.hub_pool_address, request.storage_slot, block_id);
 
+        // Use the proxy to get the proof, passing block_id and default retry/timeout
         let proof = self
-            .source_chain_provider
-            .get_proof(request.hub_pool_address, vec![request.storage_slot])
-            .block_id(block_id)
+            .execution_rpc_proxy
+            .get_proof(
+                request.hub_pool_address,
+                vec![request.storage_slot],
+                Some(block_id),
+                Some(2),
+                None,
+            )
             .await
-            .context("Failed to get storage proof from execution provider")?;
+            .context("Failed to get storage proof using execution provider proxy")?;
 
         // Assemble the ProofInputs struct
         let storage_slot = StorageSlot {
