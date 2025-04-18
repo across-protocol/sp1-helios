@@ -3,7 +3,6 @@
 use crate::{
     api::ProofRequest,
     rpc_proxies::execution::ExecutionRpcProxy,
-    try_get_checkpoint,
     try_get_client,
     try_get_updates,
     types::SP1HeliosProofData, // Concrete ProofOutput type
@@ -116,13 +115,8 @@ impl SP1Backend {
 
     /// Performs a single attempt to build the `SP1Stdin`.
     async fn try_build_sp1_stdin_once(&self, request: &ProofRequest) -> Result<SP1Stdin> {
-        // Fetch the checkpoint at the requested slot
-        let checkpoint = try_get_checkpoint(request.stored_contract_head)
-            .await
-            .context("Failed to get checkpoint")?;
-
         // Get the client from the checkpoint
-        let client = try_get_client(checkpoint)
+        let client = try_get_client(request.head_checkpoint)
             .await
             .context("Failed to get light client from checkpoint")?;
 

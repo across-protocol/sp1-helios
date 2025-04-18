@@ -56,6 +56,8 @@ pub struct ApiProofRequest {
     pub block_number: u64,
     /// The caller must pass a valid head stored on associated destination chain contract
     pub valid_contract_head: u64,
+    /// The caller must pass a valid header stored on associated destination chain contract
+    pub valid_contract_header: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, RlpEncodable, RlpDecodable)]
@@ -69,6 +71,8 @@ pub struct ProofRequest {
     /// The caller must pass a valid head stored on associated destination chain contract.
     /// A rule of thumb is to have this be earlier than block_number.
     pub stored_contract_head: u64,
+    /// This checkpoint(header) is required to check the integrity of data we're downloading before generating a proof
+    pub head_checkpoint: B256,
 }
 
 impl TryFrom<ApiProofRequest> for ProofRequest {
@@ -84,6 +88,9 @@ impl TryFrom<ApiProofRequest> for ProofRequest {
             })?,
             block_number: req.block_number,
             stored_contract_head: req.valid_contract_head,
+            head_checkpoint: B256::from_str(&req.valid_contract_header).map_err(|_| {
+                ProofServiceError::Internal("Invalid storage slot format".to_string())
+            })?,
         })
     }
 }

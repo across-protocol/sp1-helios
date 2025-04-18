@@ -24,7 +24,7 @@ pub mod types;
 pub mod util;
 
 pub const MAX_REQUEST_LIGHT_CLIENT_UPDATES: u8 = 128;
-pub const CONSENSUS_RPC_ENV_VAR: &'static str = "SOURCE_CONSENSUS_RPC_URL";
+pub const CONSENSUS_RPC_ENV_VAR: &str = "SOURCE_CONSENSUS_RPC_URL";
 
 /// Fetch updates for client
 pub async fn get_updates(

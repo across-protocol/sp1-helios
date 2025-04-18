@@ -54,7 +54,7 @@ impl<S: ConsensusSpec> ConsensusRpc<S> for ConsensusRpcProxy {
     fn new(env_var_name: &str) -> Self {
         let urls_str = env::var(env_var_name)
             .map_err(|_| eyre!("Environment variable {} not found", env_var_name))
-            .expect("No RPC URLs found in environment variable");
+            .expect("ConsensusRpcProxy: No RPC URLs found in environment variable");
 
         let urls: Vec<&str> = urls_str
             .split(',')
@@ -62,12 +62,17 @@ impl<S: ConsensusSpec> ConsensusRpc<S> for ConsensusRpcProxy {
             .filter(|s| !s.is_empty())
             .collect();
 
-        assert!(urls.len() > 0, "No RPC URLs found in environment variable");
+        assert!(
+            !urls.is_empty(),
+            "ConsensusRpcProxy: No RPC URLs found in environment variable"
+        );
 
         info!(
             "Creating ConsensusRPCProxy with {} RPC endpoints",
             urls.len()
         );
+
+        info!("Primary endpoint is {}", urls.first().unwrap());
 
         let rpcs: Vec<HttpRpc> = urls
             .iter()
@@ -108,11 +113,7 @@ impl<S: ConsensusSpec> ConsensusRpc<S> for ConsensusRpcProxy {
             .await
             .into_iter()
             .filter_map(|res| res.ok().and_then(Result::ok))
-            .filter(|bootstrap| {
-                let header_hash = bootstrap.header().beacon().tree_hash_root();
-                header_hash == checkpoint
-            })
-            .next()
+            .find(|bootstrap| bootstrap.header().beacon().tree_hash_root() == checkpoint)
             .ok_or_else(|| eyre::eyre!("Failed to fetch bootstrap from any backups"))
     }
 
