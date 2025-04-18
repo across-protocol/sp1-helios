@@ -76,12 +76,12 @@ pub async fn try_get_latest_checkpoint() -> anyhow::Result<B256> {
         .map_err(|e| anyhow::anyhow!("Failed to fetch latest checkpoint: {}", e))
 }
 
-/// Fetch checkpoint from a slot number.
+/// Fetch checkpoint from a slot number. This function only works for slots that are the 1st slot in their epoch
 pub async fn get_checkpoint(slot: u64) -> B256 {
     try_get_checkpoint(slot).await.unwrap()
 }
 
-/// Fetch checkpoint from a slot number. But error instead of crashing
+/// Fetch checkpoint from a slot number. This function only works for slots that are the 1st slot in their epoch
 pub async fn try_get_checkpoint(slot: u64) -> anyhow::Result<B256> {
     let consensus_rpc = std::env::var("SOURCE_CONSENSUS_RPC_URL")
         .map_err(|e| anyhow::anyhow!("SOURCE_CONSENSUS_RPC_URL not set: {}", e))?;

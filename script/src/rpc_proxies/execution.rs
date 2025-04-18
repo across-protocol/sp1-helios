@@ -18,6 +18,10 @@ struct Provider {
     provider: RootProvider<Http<Client>>,
 }
 
+/*
+todo: investigate if RootProvider already does exponential backoffs or timeouts. Maybe we don't need to impl that?
+Multiplexing is still important though
+*/
 #[derive(Clone)]
 pub struct ProviderProxy {
     providers: Vec<Provider>,
@@ -94,6 +98,7 @@ impl ProviderProxy {
                     Some(id) => provider.get_proof(address, keys).block_id(id).await,
                     None => provider.get_proof(address, keys).await,
                 };
+                // todo: here, check the Merkle proof and return an error if it's incorrect
                 result.map_err(|e| anyhow!("RPC error from provider: {}", e))
             }
         };

@@ -6338,6 +6338,8 @@ dependencies = [
  "clap",
  "dotenv",
  "env_logger",
+ "eyre",
+ "futures",
  "helios-consensus-core",
  "helios-ethereum",
  "log",

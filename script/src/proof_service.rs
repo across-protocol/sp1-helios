@@ -331,7 +331,13 @@ where
 
     /// Run the proof service, periodically checking for new finalized headers
     pub async fn run(mut self) -> anyhow::Result<()> {
-        // todo: we might want to get checkpoint from .env to be 100% sure it's genuine
+        /*
+        todo: strategy for getting genuine checkpoint here:
+        1. Go look in redis. If finalized checkpoint is stored here, take that one.
+        2. Go look in env. If (head + checkpoint) are set there, use those ones.
+        3. If neither is present, should probably fail to start.
+        todo: should probably have a bin here ~get_fallback_checkpoint.rs
+        */
         let checkpoint = try_get_latest_checkpoint().await?;
         info!(
             target: "proof_service::run",
