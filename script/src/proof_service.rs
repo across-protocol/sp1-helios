@@ -2,15 +2,19 @@ use crate::{
     api::ProofRequest,
     proof_backends::ProofBackend,
     redis_store::RedisStore,
-    try_get_client, try_get_latest_checkpoint,
+    try_get_client,
     types::{ProofId, ProofRequestState, ProofRequestStatus, ProofServiceError},
     util::CancellationTokenGuard,
 };
 use alloy::transports::BoxFuture;
-use anyhow::Result;
+use alloy_primitives::B256;
+use anyhow::{anyhow, Result};
 use helios_consensus_core::types::LightClientHeader;
+use tree_hash::TreeHash;
 
 use log::{debug, error, info, warn};
+use std::env;
+use std::str::FromStr;
 use std::time::Duration;
 use tokio::time::{interval_at, Instant};
 use tokio_util::sync::CancellationToken;
@@ -308,6 +312,51 @@ where
 
         Ok(false)
     }
+
+    /*
+    Strategy for getting genuine checkpoint:
+    1. Try get finalized header from redis. If exists, use header.beacon.tree_hash_root()
+    2. If not in redis, try get INIT_CHECKPOINT env var.
+    3. If neither is present, fail.
+    */
+    async fn get_initial_checkpoint(&mut self) -> anyhow::Result<B256> {
+        // 1. Try Redis
+        match self.redis_store.read_finalized_header().await {
+            Ok(Some(header)) => {
+                let checkpoint = header.beacon().tree_hash_root();
+                info!(target: "proof_service::init", "Using checkpoint calculated from Redis finalized header (Slot {}): {}", header.beacon().slot, checkpoint);
+                return Ok(checkpoint);
+            }
+            Ok(None) => {
+                info!(target: "proof_service::init", "Finalized header not found in Redis. Falling back to env var.");
+            }
+            Err(e) => {
+                warn!(target: "proof_service::init", "Error reading finalized header from Redis: {}. Falling back to env var.", e);
+            }
+        }
+
+        // 2. Try Env Var
+        match env::var("INIT_CHECKPOINT") {
+            Ok(checkpoint_hex) => {
+                info!(target: "proof_service::init", "Using checkpoint from env var INIT_CHECKPOINT: {}", checkpoint_hex);
+                let checkpoint = B256::from_str(&checkpoint_hex).map_err(|e| {
+                    anyhow!(
+                        "Invalid INIT_CHECKPOINT format: {} - Error: {}",
+                        checkpoint_hex,
+                        e
+                    )
+                })?;
+                Ok(checkpoint)
+            }
+            Err(_) => {
+                info!(target: "proof_service::init", "Checkpoint not found in env var INIT_CHECKPOINT.");
+                // 3. Fail
+                Err(anyhow::anyhow!(
+                     "Failed to get initial checkpoint. Not found in Redis and INIT_CHECKPOINT env var is not set."
+                 ))
+            }
+        }
+    }
 }
 
 // --- Runtime logic required for proof generation ---
@@ -331,17 +380,11 @@ where
 
     /// Run the proof service, periodically checking for new finalized headers
     pub async fn run(mut self) -> anyhow::Result<()> {
-        /*
-        todo: strategy for getting genuine checkpoint here:
-        1. Go look in redis. If finalized checkpoint is stored here, take that one.
-        2. Go look in env. If (head + checkpoint) are set there, use those ones.
-        3. If neither is present, should probably fail to start.
-        todo: should probably have a bin here ~get_fallback_checkpoint.rs
-        */
-        let checkpoint = try_get_latest_checkpoint().await?;
+        let checkpoint = self.get_initial_checkpoint().await?;
+
         info!(
             target: "proof_service::run",
-            "Initializing light client with checkpoint: {:?}",
+            "Initializing light client with checkpoint: {}",
             checkpoint
         );
 

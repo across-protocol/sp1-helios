@@ -107,7 +107,7 @@ pub async fn try_get_checkpoint(slot: u64) -> anyhow::Result<B256> {
     let (finalized_block_send, _) = watch::channel(None);
     let (channel_send, _) = watch::channel(None);
     let client = Inner::<MainnetConsensusSpec, ConsensusRpcProxy>::new(
-        &CONSENSUS_RPC_ENV_VAR,
+        CONSENSUS_RPC_ENV_VAR,
         block_send,
         finalized_block_send,
         channel_send,
