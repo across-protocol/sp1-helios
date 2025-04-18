@@ -219,7 +219,6 @@ where
         &mut self,
         latest_finalized_header: LightClientHeader,
     ) -> Result<bool, ProofServiceError> {
-        // Use redis_store to read header
         let stored_finalized_header = self.redis_store.read_finalized_header().await?;
         let should_update_header: bool = match stored_finalized_header {
             Some(redis_header) => {
@@ -319,19 +318,20 @@ where
     2. If not in redis, try get INIT_CHECKPOINT env var.
     3. If neither is present, fail.
     */
-    async fn get_initial_checkpoint(&mut self) -> anyhow::Result<B256> {
+    async fn get_initial_checkpoint(&mut self) -> anyhow::Result<(B256, bool)> {
         // 1. Try Redis
         match self.redis_store.read_finalized_header().await {
             Ok(Some(header)) => {
                 let checkpoint = header.beacon().tree_hash_root();
                 info!(target: "proof_service::init", "Using checkpoint calculated from Redis finalized header (Slot {}): {}", header.beacon().slot, checkpoint);
-                return Ok(checkpoint);
+                return Ok((checkpoint, true));
             }
             Ok(None) => {
                 info!(target: "proof_service::init", "Finalized header not found in Redis. Falling back to env var.");
             }
             Err(e) => {
                 warn!(target: "proof_service::init", "Error reading finalized header from Redis: {}. Falling back to env var.", e);
+                return Err(anyhow!("{}", e));
             }
         }
 
@@ -346,7 +346,7 @@ where
                         e
                     )
                 })?;
-                Ok(checkpoint)
+                Ok((checkpoint, false))
             }
             Err(_) => {
                 info!(target: "proof_service::init", "Checkpoint not found in env var INIT_CHECKPOINT.");
@@ -380,7 +380,7 @@ where
 
     /// Run the proof service, periodically checking for new finalized headers
     pub async fn run(mut self) -> anyhow::Result<()> {
-        let checkpoint = self.get_initial_checkpoint().await?;
+        let (checkpoint, from_redis) = self.get_initial_checkpoint().await?;
 
         info!(
             target: "proof_service::run",
@@ -405,8 +405,10 @@ where
             "Starting main loop. Header polling interval: 12s"
         );
 
-        // We advance DB state on startup and whenever we see a new finalized slot
-        let mut should_advance_db_state = true;
+        // If we didn't read checkpoint from redis, we should advance redis state, i.e. put finalized header there
+        // todo: How will it work with multiple instances running ? ......... We lock before doing any changes, should be fine.
+        // todo: We can actually set `should_advance_db_state` to true every loop run lol
+        let mut should_advance_db_state = !from_redis;
         loop {
             if should_advance_db_state {
                 let res = self
