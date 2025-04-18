@@ -28,14 +28,14 @@ pub const CONSENSUS_RPC_ENV_VAR: &'static str = "SOURCE_CONSENSUS_RPC_URL";
 
 /// Fetch updates for client
 pub async fn get_updates(
-    client: &Inner<MainnetConsensusSpec, ConsensusRpcProxy<MainnetConsensusSpec>>,
+    client: &Inner<MainnetConsensusSpec, ConsensusRpcProxy>,
 ) -> Vec<Update<MainnetConsensusSpec>> {
     try_get_updates(client).await.unwrap()
 }
 
 /// Fetch updates for client
 pub async fn try_get_updates(
-    client: &Inner<MainnetConsensusSpec, ConsensusRpcProxy<MainnetConsensusSpec>>,
+    client: &Inner<MainnetConsensusSpec, ConsensusRpcProxy>,
 ) -> anyhow::Result<Vec<Update<MainnetConsensusSpec>>> {
     let period =
         calc_sync_period::<MainnetConsensusSpec>(client.store.finalized_header.beacon().slot);
@@ -106,7 +106,7 @@ pub async fn try_get_checkpoint(slot: u64) -> anyhow::Result<B256> {
     let (block_send, _) = channel(256);
     let (finalized_block_send, _) = watch::channel(None);
     let (channel_send, _) = watch::channel(None);
-    let client = Inner::<MainnetConsensusSpec, ConsensusRpcProxy<MainnetConsensusSpec>>::new(
+    let client = Inner::<MainnetConsensusSpec, ConsensusRpcProxy>::new(
         &CONSENSUS_RPC_ENV_VAR,
         block_send,
         finalized_block_send,
@@ -124,16 +124,14 @@ pub async fn try_get_checkpoint(slot: u64) -> anyhow::Result<B256> {
 }
 
 /// Setup a client from a checkpoint.
-pub async fn get_client(
-    checkpoint: B256,
-) -> Inner<MainnetConsensusSpec, ConsensusRpcProxy<MainnetConsensusSpec>> {
+pub async fn get_client(checkpoint: B256) -> Inner<MainnetConsensusSpec, ConsensusRpcProxy> {
     try_get_client(checkpoint).await.unwrap()
 }
 
 /// Setup a client from a checkpoint.
 pub async fn try_get_client(
     checkpoint: B256,
-) -> anyhow::Result<Inner<MainnetConsensusSpec, ConsensusRpcProxy<MainnetConsensusSpec>>> {
+) -> anyhow::Result<Inner<MainnetConsensusSpec, ConsensusRpcProxy>> {
     let chain_id = std::env::var("SOURCE_CHAIN_ID")
         .map_err(|e| anyhow::anyhow!("Failed to get SOURCE_CHAIN_ID: {}", e))?;
     let network = Network::from_chain_id(
@@ -177,7 +175,7 @@ pub async fn try_get_client(
 /// verifications on the state applied and streams out finalized blocks
 pub async fn create_streaming_client(
     checkpoint: B256,
-) -> ConsensusClient<MainnetConsensusSpec, ConsensusRpcProxy<MainnetConsensusSpec>, ConfigDB> {
+) -> ConsensusClient<MainnetConsensusSpec, ConsensusRpcProxy, ConfigDB> {
     let consensus_rpc = std::env::var("SOURCE_CONSENSUS_RPC_URL").unwrap();
     let chain_id = std::env::var("SOURCE_CHAIN_ID").unwrap();
     let network = Network::from_chain_id(chain_id.parse().unwrap()).unwrap();

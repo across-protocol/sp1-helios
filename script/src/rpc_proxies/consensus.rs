@@ -7,9 +7,15 @@ use helios_consensus_core::{
 };
 use helios_ethereum::rpc::{http_rpc::HttpRpc, ConsensusRpc};
 use log::{info, warn};
-use std::marker::PhantomData;
 use std::{env, time::Duration};
-use tree_hash::TreeHash; // Add this import
+use tree_hash::TreeHash;
+
+// Required functionality:
+// 1. todo: prob. removing this stage alltogether. try_get_checkpoint(request.stored_contract_head) -- can create a separate fn for this that checks for head consistency as well. No client needed
+// 2. try_get_client(checkpoint): client is calling "bootstrap" on the given checkpoint. Given that the checkpoint is valid (checked on prev. stage), client can accept input from any RPC.
+// 3. try_get_updates(&client): this is just an rpc call. Can create a custom fn for this. E.g. with update validity check against the current client state
+// todo: what's with this stage? Can't I get a finality update for a specific slot?
+// 4. client.rpc.get_finality_update(): just an rpc call again. Can also check against client state (e.g. after applying sync committee updates)
 
 /// Wraps `helios_ethereum::rpc::http_rpc::HttpRpc`. Provides extra functionality:
 ///   - multiplexing to multiple configured clients
@@ -20,60 +26,15 @@ use tree_hash::TreeHash; // Add this import
 /// This is because we only have one production RPC, and other ones are public, potentially less
 /// reliable both in terms of data integrity and uptime
 // todo: the main thing to add is estimates on current committee period and finalized slot
-pub struct ConsensusRpcProxy<S: ConsensusSpec> {
+pub struct ConsensusRpcProxy {
     rpcs: Vec<HttpRpc>,
-    _phantom: PhantomData<S>,
-}
-
-// Required functionality:
-// 1. todo: prob. removing this stage alltogether. try_get_checkpoint(request.stored_contract_head) -- can create a separate fn for this that checks for head consistency as well. No client needed
-// 2. try_get_client(checkpoint): client is calling "bootstrap" on the given checkpoint. Given that the checkpoint is valid (checked on prev. stage), client can accept input from any RPC.
-// 3. try_get_updates(&client): this is just an rpc call. Can create a custom fn for this. E.g. with update validity check against the current client state
-// todo: what's with this stage? Can't I get a finality update for a specific slot?
-// 4. client.rpc.get_finality_update(): just an rpc call again. Can also check against client state (e.g. after applying sync committee updates)
-
-impl<S: ConsensusSpec> ConsensusRpcProxy<S> {
-    /// Creates a new ConsensusRPCProxy from an environment variable
-    /// Environment variable should contain a comma-separated list of RPC URLs
-    pub fn from_env(env_var: &str) -> Result<Self> {
-        let urls_str =
-            env::var(env_var).map_err(|_| eyre!("Environment variable {} not found", env_var))?;
-
-        let urls: Vec<&str> = urls_str
-            .split(',')
-            .map(|s| s.trim())
-            .filter(|s| !s.is_empty())
-            .collect();
-
-        if urls.is_empty() {
-            return Err(eyre!(
-                "No RPC URLs found in environment variable {}",
-                env_var
-            ));
-        }
-
-        info!(
-            "Creating ConsensusRPCProxy with {} RPC endpoints",
-            urls.len()
-        );
-
-        let rpcs: Vec<HttpRpc> = urls
-            .iter()
-            .map(|url| <HttpRpc as ConsensusRpc<S>>::new(url))
-            .collect();
-
-        Ok(Self {
-            rpcs,
-            _phantom: PhantomData,
-        })
-    }
 }
 
 /// The default strategy for these client-facing calls should be: first request form the most trusted RPC. If that fails, try to use fallbacks.
 /// In either case, client will not accept invalid response, so we're good to use public rpcs as backups.
 #[cfg_attr(not(target_arch = "wasm32"), async_trait)]
 #[cfg_attr(target_arch = "wasm32", async_trait(?Send))]
-impl<S: ConsensusSpec> ConsensusRpc<S> for ConsensusRpcProxy<S> {
+impl<S: ConsensusSpec> ConsensusRpc<S> for ConsensusRpcProxy {
     /// Creates a new instance using RPC endpoints from an environment variable.
     ///
     /// # Parameters
@@ -91,7 +52,29 @@ impl<S: ConsensusSpec> ConsensusRpc<S> for ConsensusRpcProxy<S> {
     /// let rpc = ConsensusRpcProxy::<MainnetSpec>::new("CONSENSUS_RPCS");
     /// ```
     fn new(env_var_name: &str) -> Self {
-        Self::from_env(env_var_name).unwrap()
+        let urls_str = env::var(env_var_name)
+            .map_err(|_| eyre!("Environment variable {} not found", env_var_name))
+            .expect("No RPC URLs found in environment variable");
+
+        let urls: Vec<&str> = urls_str
+            .split(',')
+            .map(|s| s.trim())
+            .filter(|s| !s.is_empty())
+            .collect();
+
+        assert!(urls.len() > 0, "No RPC URLs found in environment variable");
+
+        info!(
+            "Creating ConsensusRPCProxy with {} RPC endpoints",
+            urls.len()
+        );
+
+        let rpcs: Vec<HttpRpc> = urls
+            .iter()
+            .map(|url| <HttpRpc as ConsensusRpc<S>>::new(url))
+            .collect();
+
+        Self { rpcs }
     }
 
     /// Tries to fetch bootstrap from the first available RPC. If that errors, fetches from all the backups and returns a valid one or errors

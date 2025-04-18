@@ -7,7 +7,6 @@ use alloy_primitives::{address, b256, B256, U256};
 use anyhow::Result;
 use helios_consensus_core::consensus_spec::MainnetConsensusSpec;
 use helios_ethereum::consensus::Inner;
-use helios_ethereum::rpc::http_rpc::HttpRpc;
 use helios_ethereum::rpc::ConsensusRpc;
 use log::{error, info};
 use reqwest::Url;
@@ -119,7 +118,7 @@ impl SP1HeliosOperator {
     /// Fetch values and generate an 'update' proof for the SP1 Helios contract.
     async fn request_update(
         &self,
-        mut client: Inner<MainnetConsensusSpec, ConsensusRpcProxy<MainnetConsensusSpec>>,
+        mut client: Inner<MainnetConsensusSpec, ConsensusRpcProxy>,
     ) -> Result<Option<SP1ProofWithPublicValues>> {
         // Fetch required values.
         let provider = ProviderBuilder::new().on_http(self.rpc_url.clone());
