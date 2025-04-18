@@ -2,7 +2,7 @@
 
 use crate::{
     api::ProofRequest,
-    rpc_proxies::execution::ProviderProxy,
+    rpc_proxies::execution::ExecutionRpcProxy,
     try_get_checkpoint,
     try_get_client,
     try_get_updates,
@@ -41,7 +41,7 @@ impl Default for SP1BackendConfig {
 /// An implementation of `ProofBackend` using the SP1 prover.
 #[derive(Clone)]
 pub struct SP1Backend {
-    execution_rpc_proxy: ProviderProxy,
+    execution_rpc_proxy: ExecutionRpcProxy,
     prover_client: Arc<EnvProver>,
     proving_key: SP1ProvingKey,
     config: SP1BackendConfig,
@@ -53,7 +53,7 @@ impl SP1Backend {
         dotenv::dotenv().ok();
 
         // Create the ProviderProxy from environment variables
-        let source_chain_proxy = ProviderProxy::from_env();
+        let source_chain_proxy = ExecutionRpcProxy::from_env();
 
         // Pass the proxy to the constructor
         Self::new(source_chain_proxy, None)
@@ -61,7 +61,7 @@ impl SP1Backend {
 
     /// Creates a new SP1Backend instance, initializing prover client and keys from environment.
     pub fn new(
-        source_chain_proxy: ProviderProxy,
+        source_chain_proxy: ExecutionRpcProxy,
         config: Option<SP1BackendConfig>,
     ) -> Result<Self> {
         info!(target: "sp1_backend::init", "Initializing SP1Backend...");

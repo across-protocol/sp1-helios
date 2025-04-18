@@ -7,10 +7,10 @@ use helios_consensus_core::{
 use helios_ethereum::{
     config::{checkpoints, networks::Network, Config},
     consensus::Inner,
-    rpc::http_rpc::HttpRpc,
 };
 use helios_ethereum::{consensus::ConsensusClient, database::ConfigDB, rpc::ConsensusRpc};
 use log::info;
+use rpc_proxies::consensus::ConsensusRpcProxy;
 
 use std::sync::Arc;
 use tokio::sync::{mpsc::channel, watch};
@@ -24,17 +24,18 @@ pub mod types;
 pub mod util;
 
 pub const MAX_REQUEST_LIGHT_CLIENT_UPDATES: u8 = 128;
+pub const CONSENSUS_RPC_ENV_VAR: &'static str = "SOURCE_CONSENSUS_RPC_URL";
 
 /// Fetch updates for client
 pub async fn get_updates(
-    client: &Inner<MainnetConsensusSpec, HttpRpc>,
+    client: &Inner<MainnetConsensusSpec, ConsensusRpcProxy<MainnetConsensusSpec>>,
 ) -> Vec<Update<MainnetConsensusSpec>> {
     try_get_updates(client).await.unwrap()
 }
 
 /// Fetch updates for client
 pub async fn try_get_updates(
-    client: &Inner<MainnetConsensusSpec, HttpRpc>,
+    client: &Inner<MainnetConsensusSpec, ConsensusRpcProxy<MainnetConsensusSpec>>,
 ) -> anyhow::Result<Vec<Update<MainnetConsensusSpec>>> {
     let period =
         calc_sync_period::<MainnetConsensusSpec>(client.store.finalized_header.beacon().slot);
@@ -83,8 +84,6 @@ pub async fn get_checkpoint(slot: u64) -> B256 {
 
 /// Fetch checkpoint from a slot number. This function only works for slots that are the 1st slot in their epoch
 pub async fn try_get_checkpoint(slot: u64) -> anyhow::Result<B256> {
-    let consensus_rpc = std::env::var("SOURCE_CONSENSUS_RPC_URL")
-        .map_err(|e| anyhow::anyhow!("SOURCE_CONSENSUS_RPC_URL not set: {}", e))?;
     let chain_id = std::env::var("SOURCE_CHAIN_ID")
         .map_err(|e| anyhow::anyhow!("SOURCE_CHAIN_ID not set: {}", e))?;
     let network = Network::from_chain_id(
@@ -96,7 +95,7 @@ pub async fn try_get_checkpoint(slot: u64) -> anyhow::Result<B256> {
     let base_config = network.to_base_config();
 
     let config = Config {
-        consensus_rpc: consensus_rpc.to_string(),
+        consensus_rpc: String::new(), // don't think it's used
         execution_rpc: String::new(),
         chain: base_config.chain,
         forks: base_config.forks,
@@ -107,8 +106,8 @@ pub async fn try_get_checkpoint(slot: u64) -> anyhow::Result<B256> {
     let (block_send, _) = channel(256);
     let (finalized_block_send, _) = watch::channel(None);
     let (channel_send, _) = watch::channel(None);
-    let client = Inner::<MainnetConsensusSpec, HttpRpc>::new(
-        &consensus_rpc,
+    let client = Inner::<MainnetConsensusSpec, ConsensusRpcProxy<MainnetConsensusSpec>>::new(
+        &CONSENSUS_RPC_ENV_VAR,
         block_send,
         finalized_block_send,
         channel_send,
@@ -125,16 +124,16 @@ pub async fn try_get_checkpoint(slot: u64) -> anyhow::Result<B256> {
 }
 
 /// Setup a client from a checkpoint.
-pub async fn get_client(checkpoint: B256) -> Inner<MainnetConsensusSpec, HttpRpc> {
+pub async fn get_client(
+    checkpoint: B256,
+) -> Inner<MainnetConsensusSpec, ConsensusRpcProxy<MainnetConsensusSpec>> {
     try_get_client(checkpoint).await.unwrap()
 }
 
 /// Setup a client from a checkpoint.
 pub async fn try_get_client(
     checkpoint: B256,
-) -> anyhow::Result<Inner<MainnetConsensusSpec, HttpRpc>> {
-    let consensus_rpc = std::env::var("SOURCE_CONSENSUS_RPC_URL")
-        .map_err(|e| anyhow::anyhow!("Failed to get SOURCE_CONSENSUS_RPC_URL: {}", e))?;
+) -> anyhow::Result<Inner<MainnetConsensusSpec, ConsensusRpcProxy<MainnetConsensusSpec>>> {
     let chain_id = std::env::var("SOURCE_CHAIN_ID")
         .map_err(|e| anyhow::anyhow!("Failed to get SOURCE_CHAIN_ID: {}", e))?;
     let network = Network::from_chain_id(
@@ -146,7 +145,7 @@ pub async fn try_get_client(
     let base_config = network.to_base_config();
 
     let config = Config {
-        consensus_rpc: consensus_rpc.to_string(),
+        consensus_rpc: String::new(), // I don't think it's used
         execution_rpc: String::new(),
         chain: base_config.chain,
         forks: base_config.forks,
@@ -159,7 +158,7 @@ pub async fn try_get_client(
     let (channel_send, _) = watch::channel(None);
 
     let mut client = Inner::new(
-        &consensus_rpc,
+        CONSENSUS_RPC_ENV_VAR,
         block_send,
         finalized_block_send,
         channel_send,
@@ -178,7 +177,7 @@ pub async fn try_get_client(
 /// verifications on the state applied and streams out finalized blocks
 pub async fn create_streaming_client(
     checkpoint: B256,
-) -> ConsensusClient<MainnetConsensusSpec, HttpRpc, ConfigDB> {
+) -> ConsensusClient<MainnetConsensusSpec, ConsensusRpcProxy<MainnetConsensusSpec>, ConfigDB> {
     let consensus_rpc = std::env::var("SOURCE_CONSENSUS_RPC_URL").unwrap();
     let chain_id = std::env::var("SOURCE_CHAIN_ID").unwrap();
     let network = Network::from_chain_id(chain_id.parse().unwrap()).unwrap();

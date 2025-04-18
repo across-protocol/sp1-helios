@@ -18,16 +18,11 @@ struct Provider {
     provider: RootProvider<Http<Client>>,
 }
 
-/*
-todo: investigate if RootProvider already does exponential backoffs or timeouts. Maybe we don't need to impl that?
-Multiplexing is still important though
-*/
 #[derive(Clone)]
-pub struct ProviderProxy {
+pub struct ExecutionRpcProxy {
     providers: Vec<Provider>,
 }
 
-// todo? Using these hardcoded .env vars. OK?
 const ENV_VAR_NAMES: &[&str] = &[
     "SOURCE_EXECUTION_RPC_URL",
     "SOURCE_EXECUTION_RPC_URL_BACKUP_0",
@@ -35,11 +30,9 @@ const ENV_VAR_NAMES: &[&str] = &[
 ];
 
 // Public interface
-impl ProviderProxy {
+impl ExecutionRpcProxy {
     #[must_use]
     pub fn from_env() -> Self {
-        dotenv::dotenv().ok();
-
         let mut providers = vec![];
         for name in ENV_VAR_NAMES {
             let url: Result<Url> = {
@@ -79,7 +72,8 @@ impl ProviderProxy {
     }
 
     /// Fetches an Ethereum storage proof (`EIP1186AccountProofResponse`) from the configured providers
-    /// with retry and timeout logic.
+    /// with retry and timeout logic. I don't think RootProvider implements any retries / timeout handling by default, so we have to impl ourselves
+    // todo: consider using retri for retrying with exponential backoff
     pub async fn get_proof(
         &self,
         address: Address,
@@ -115,7 +109,7 @@ impl ProviderProxy {
 }
 
 // todo? For now, returning the result that's arrived first. Could change this to a quorum-based solution
-impl ProviderProxy {
+impl ExecutionRpcProxy {
     /// Generic helper to perform a request against all providers concurrently and return the first
     /// successful response within a timeout.
     async fn _proxy_request_try_once<R, F, Fut>(

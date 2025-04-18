@@ -12,6 +12,7 @@ use helios_ethereum::rpc::ConsensusRpc;
 use log::{error, info};
 use reqwest::Url;
 use sp1_helios_primitives::types::{ContractStorage, ProofInputs, StorageSlot};
+use sp1_helios_script::rpc_proxies::consensus::ConsensusRpcProxy;
 use sp1_helios_script::*;
 use sp1_sdk::{EnvProver, ProverClient, SP1ProofWithPublicValues, SP1ProvingKey, SP1Stdin};
 use std::env;
@@ -118,7 +119,7 @@ impl SP1HeliosOperator {
     /// Fetch values and generate an 'update' proof for the SP1 Helios contract.
     async fn request_update(
         &self,
-        mut client: Inner<MainnetConsensusSpec, HttpRpc>,
+        mut client: Inner<MainnetConsensusSpec, ConsensusRpcProxy<MainnetConsensusSpec>>,
     ) -> Result<Option<SP1ProofWithPublicValues>> {
         // Fetch required values.
         let provider = ProviderBuilder::new().on_http(self.rpc_url.clone());

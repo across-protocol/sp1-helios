@@ -25,8 +25,6 @@ pub struct ConsensusRpcProxy<S: ConsensusSpec> {
     _phantom: PhantomData<S>,
 }
 
-// todo: start with a simple impl: calling main RPC, multiplexing to backup ones if needed.
-
 // Required functionality:
 // 1. todo: prob. removing this stage alltogether. try_get_checkpoint(request.stored_contract_head) -- can create a separate fn for this that checks for head consistency as well. No client needed
 // 2. try_get_client(checkpoint): client is calling "bootstrap" on the given checkpoint. Given that the checkpoint is valid (checked on prev. stage), client can accept input from any RPC.
