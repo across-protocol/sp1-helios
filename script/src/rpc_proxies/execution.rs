@@ -29,6 +29,8 @@ const ENV_VAR_NAMES: &[&str] = &[
     "SOURCE_EXECUTION_RPC_URL_BACKUP_1",
 ];
 
+// ! todo: replace this with multiplex(..) logic from the rust-fut prototype project
+// ! also, change env reading to reading a list of endpoints from a single env var.
 // Public interface
 impl ExecutionRpcProxy {
     #[must_use]
