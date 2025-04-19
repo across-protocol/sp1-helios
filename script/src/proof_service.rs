@@ -388,7 +388,23 @@ where
             checkpoint
         );
 
-        // todo: can we somehow check via genesis params that the loaded state is genuine? Mb it's already done?
+        /*
+        todo:
+        If we're using Inner as our main light client sync "driver", we can't control multiplexing tightly.
+        E.g. if we have one bad endpoint in our backups (say that's out of sync for 2 days, but still returning results)
+        Then we can't get backup rpc calls return reliable results.
+
+        A solution I'm thinking about is creating our own version of Inner. A main thing in our Inner would be Store,
+        that is cloneable. And for each logical opeartion, we could multiplex the *whole opeartion* across different RPCs.
+        The main advantages is that each RPC would have it's own little "container function" which will check integrity of
+        it's outputs. Thus the situations where "we just downloaded a finality update, but then the corresponding committee
+        sync update is not available" should not arise. Or if they do, they'll be confined to a single RPC.
+
+        Main functions we're looking to support are: `.sync` and `.advance`.
+        We can also support additional functions, like: `.get_proof_inputs`
+         */
+
+        // todo: here, instead of just bootstrapping client from checkpoint, we might want to call .sync
         let mut light_client = try_get_client(checkpoint).await?;
         info!(
             target: "proof_service::run",
@@ -438,6 +454,7 @@ where
             let _ = interval.tick().await;
 
             let prev_finalized_slot = light_client.store.finalized_header.beacon().slot;
+            // todo: multiplex this via a new Inner replacement client
             let res = light_client.advance().await;
             if let Err(err) = res {
                 warn!(target: "proof_service::run", "Helios light client advance error: {}", err);
