@@ -152,10 +152,6 @@ contract SP1Helios is AccessControlEnumerable {
             revert NoUpdatersProvided();
         }
 
-        // Make UPDATER_ROLE not have any admin roles that can manage it
-        // This freezes the updater set - no role can add or remove updaters
-        _setRoleAdmin(UPDATER_ROLE, bytes32(0));
-
         // Add all updaters
         for (uint256 i = 0; i < params.updaters.length; ++i) {
             address updater = params.updaters[i];

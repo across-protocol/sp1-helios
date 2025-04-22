@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-pragma solidity ^0.8.22;
+pragma solidity 0.8.28;
 
 import {Test, console2} from "forge-std/Test.sol";
 import {SP1Helios} from "../src/SP1Helios.sol";
@@ -67,7 +67,6 @@ contract SP1HeliosTest is Test {
             INITIAL_SYNC_COMMITTEE_HASH
         );
         // Check roles
-        // UPDATER_ROLE is its own admin now, not DEFAULT_ADMIN_ROLE
         assertTrue(helios.hasRole(helios.UPDATER_ROLE(), initialUpdater));
         assertEq(helios.verifier(), address(mockVerifier));
     }
