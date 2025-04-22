@@ -12,9 +12,6 @@ import {AccessControlEnumerable} from "@openzeppelin/access/extensions/AccessCon
 /// Updater permissions are fixed at contract creation time and cannot be modified afterward.
 /// @custom:security-contact bugs@across.to 
 contract SP1Helios is AccessControlEnumerable {
-    /// @notice The genesis validators root for the beacon chain
-    bytes32 public immutable GENESIS_VALIDATORS_ROOT;
-
     /// @notice The timestamp at which the beacon chain genesis block was processed
     uint256 public immutable GENESIS_TIME;
 
@@ -26,9 +23,6 @@ contract SP1Helios is AccessControlEnumerable {
 
     /// @notice The number of slots in an epoch on the beacon chain
     uint256 public immutable SLOTS_PER_EPOCH;
-
-    /// @notice The chain ID of the source blockchain
-    uint256 public immutable SOURCE_CHAIN_ID;
 
     /// @notice Role for updater operations
     bytes32 public constant UPDATER_ROLE = keccak256("UPDATER_ROLE");
@@ -84,14 +78,12 @@ contract SP1Helios is AccessControlEnumerable {
     struct InitParams {
         bytes32 executionStateRoot;
         uint256 genesisTime;
-        bytes32 genesisValidatorsRoot;
         uint256 head;
         bytes32 header;
         bytes32 heliosProgramVkey;
         uint256 secondsPerSlot;
         uint256 slotsPerEpoch;
         uint256 slotsPerPeriod;
-        uint256 sourceChainId;
         bytes32 syncCommitteeHash;
         address verifier;
         address[] updaters;
@@ -134,12 +126,10 @@ contract SP1Helios is AccessControlEnumerable {
     /// @dev Sets up immutable contract state and grants the UPDATER_ROLE to the provided updaters
     /// @param params The initialization parameters
     constructor(InitParams memory params) {
-        GENESIS_VALIDATORS_ROOT = params.genesisValidatorsRoot;
         GENESIS_TIME = params.genesisTime;
         SECONDS_PER_SLOT = params.secondsPerSlot;
         SLOTS_PER_PERIOD = params.slotsPerPeriod;
         SLOTS_PER_EPOCH = params.slotsPerEpoch;
-        SOURCE_CHAIN_ID = params.sourceChainId;
         syncCommittees[getSyncCommitteePeriod(params.head)] = params.syncCommitteeHash;
         heliosProgramVkey = params.heliosProgramVkey;
         headers[params.head] = params.header;
