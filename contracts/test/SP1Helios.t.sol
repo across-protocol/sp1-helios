@@ -13,12 +13,10 @@ contract SP1HeliosTest is Test {
     address initialUpdater = address(0x2);
 
     // Constants for test setup
-    bytes32 constant GENESIS_VALIDATORS_ROOT = bytes32(uint256(1));
     uint256 constant GENESIS_TIME = 1606824023; // Dec 1, 2020
     uint256 constant SECONDS_PER_SLOT = 12;
     uint256 constant SLOTS_PER_EPOCH = 32;
     uint256 constant SLOTS_PER_PERIOD = 8192; // 256 epochs
-    uint256 constant SOURCE_CHAIN_ID = 1; // Ethereum mainnet
     bytes32 constant INITIAL_HEADER = bytes32(uint256(2));
     bytes32 constant INITIAL_EXECUTION_STATE_ROOT = bytes32(uint256(3));
     bytes32 constant INITIAL_SYNC_COMMITTEE_HASH = bytes32(uint256(4));
@@ -35,14 +33,12 @@ contract SP1HeliosTest is Test {
         SP1Helios.InitParams memory params = SP1Helios.InitParams({
             executionStateRoot: INITIAL_EXECUTION_STATE_ROOT,
             genesisTime: GENESIS_TIME,
-            genesisValidatorsRoot: GENESIS_VALIDATORS_ROOT,
             head: INITIAL_HEAD,
             header: INITIAL_HEADER,
             heliosProgramVkey: HELIOS_PROGRAM_VKEY,
             secondsPerSlot: SECONDS_PER_SLOT,
             slotsPerEpoch: SLOTS_PER_EPOCH,
             slotsPerPeriod: SLOTS_PER_PERIOD,
-            sourceChainId: SOURCE_CHAIN_ID,
             syncCommitteeHash: INITIAL_SYNC_COMMITTEE_HASH,
             verifier: address(mockVerifier),
             updaters: updatersArray
@@ -52,12 +48,10 @@ contract SP1HeliosTest is Test {
     }
 
     function testInitialization() public view {
-        assertEq(helios.GENESIS_VALIDATORS_ROOT(), GENESIS_VALIDATORS_ROOT);
         assertEq(helios.GENESIS_TIME(), GENESIS_TIME);
         assertEq(helios.SECONDS_PER_SLOT(), SECONDS_PER_SLOT);
         assertEq(helios.SLOTS_PER_EPOCH(), SLOTS_PER_EPOCH);
         assertEq(helios.SLOTS_PER_PERIOD(), SLOTS_PER_PERIOD);
-        assertEq(helios.SOURCE_CHAIN_ID(), SOURCE_CHAIN_ID);
         assertEq(helios.heliosProgramVkey(), HELIOS_PROGRAM_VKEY);
         assertEq(helios.head(), INITIAL_HEAD);
         assertEq(helios.headers(INITIAL_HEAD), INITIAL_HEADER);
@@ -165,14 +159,12 @@ contract SP1HeliosTest is Test {
         SP1Helios.InitParams memory params = SP1Helios.InitParams({
             executionStateRoot: INITIAL_EXECUTION_STATE_ROOT,
             genesisTime: GENESIS_TIME,
-            genesisValidatorsRoot: GENESIS_VALIDATORS_ROOT,
             head: INITIAL_HEAD,
             header: INITIAL_HEADER,
             heliosProgramVkey: HELIOS_PROGRAM_VKEY,
             secondsPerSlot: SECONDS_PER_SLOT,
             slotsPerEpoch: SLOTS_PER_EPOCH,
             slotsPerPeriod: SLOTS_PER_PERIOD,
-            sourceChainId: SOURCE_CHAIN_ID,
             syncCommitteeHash: INITIAL_SYNC_COMMITTEE_HASH,
             verifier: address(newMockVerifier),
             updaters: updatersArray
@@ -453,14 +445,12 @@ contract SP1HeliosTest is Test {
         SP1Helios.InitParams memory params = SP1Helios.InitParams({
             executionStateRoot: INITIAL_EXECUTION_STATE_ROOT,
             genesisTime: GENESIS_TIME,
-            genesisValidatorsRoot: GENESIS_VALIDATORS_ROOT,
             head: INITIAL_HEAD,
             header: INITIAL_HEADER,
             heliosProgramVkey: HELIOS_PROGRAM_VKEY,
             secondsPerSlot: SECONDS_PER_SLOT,
             slotsPerEpoch: SLOTS_PER_EPOCH,
             slotsPerPeriod: SLOTS_PER_PERIOD,
-            sourceChainId: SOURCE_CHAIN_ID,
             syncCommitteeHash: INITIAL_SYNC_COMMITTEE_HASH,
             verifier: address(newMockVerifier),
             updaters: updatersArray
@@ -484,14 +474,12 @@ contract SP1HeliosTest is Test {
         SP1Helios.InitParams memory params = SP1Helios.InitParams({
             executionStateRoot: INITIAL_EXECUTION_STATE_ROOT,
             genesisTime: GENESIS_TIME,
-            genesisValidatorsRoot: GENESIS_VALIDATORS_ROOT,
             head: INITIAL_HEAD,
             header: INITIAL_HEADER,
             heliosProgramVkey: HELIOS_PROGRAM_VKEY,
             secondsPerSlot: SECONDS_PER_SLOT,
             slotsPerEpoch: SLOTS_PER_EPOCH,
             slotsPerPeriod: SLOTS_PER_PERIOD,
-            sourceChainId: SOURCE_CHAIN_ID,
             syncCommitteeHash: INITIAL_SYNC_COMMITTEE_HASH,
             verifier: address(newMockVerifier),
             updaters: updatersArray
