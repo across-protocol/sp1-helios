@@ -3,6 +3,8 @@ use alloy_primitives::Address;
 use anyhow::Result;
 /// Generate genesis parameters for light client contract
 use clap::Parser;
+use helios_consensus_core::consensus_spec::MainnetConsensusSpec;
+use helios_ethereum::rpc::http_rpc::HttpRpc;
 use serde::{Deserialize, Serialize};
 use sp1_helios_script::{get_checkpoint, get_client, get_latest_checkpoint};
 use sp1_sdk::{utils, HashableKey, Prover, ProverClient};
@@ -74,7 +76,7 @@ pub async fn main() -> Result<()> {
         verifier = env::var("SP1_VERIFIER_ADDRESS").unwrap().parse().unwrap();
     }
 
-    let helios_client = get_client(checkpoint).await;
+    let helios_client = get_client::<MainnetConsensusSpec, HttpRpc>(checkpoint).await;
     let finalized_header = helios_client
         .store
         .finalized_header

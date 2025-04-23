@@ -2,14 +2,27 @@ use crate::{
     api::ProofRequest,
     proof_backends::ProofBackend,
     redis_store::RedisStore,
-    try_get_client,
+    rpc_proxies::{
+        consensus::ConsensusRpcProxy,
+        execution::{self},
+    },
+    try_get_client, try_get_updates,
     types::{ProofId, ProofRequestState, ProofRequestStatus, ProofServiceError},
     util::CancellationTokenGuard,
 };
 use alloy::transports::BoxFuture;
 use alloy_primitives::B256;
-use anyhow::{anyhow, Result};
-use helios_consensus_core::types::LightClientHeader;
+use alloy_trie::proof;
+use anyhow::{anyhow, Context, Result};
+use helios_consensus_core::{
+    consensus_spec::{ConsensusSpec, MainnetConsensusSpec},
+    types::{FinalityUpdate, LightClientHeader, Update},
+};
+use helios_ethereum::{
+    consensus::Inner,
+    rpc::{http_rpc::HttpRpc, ConsensusRpc},
+};
+use sp1_helios_primitives::types::{ContractStorage, ProofInputs, StorageSlot};
 use tree_hash::TreeHash;
 
 use log::{debug, error, info, warn};
@@ -30,6 +43,7 @@ pub struct ProofService<B>
 where
     B: ProofBackend + Clone + Send + Sync + 'static,
 {
+    execution_rpc_proxy: execution::Proxy,
     proof_backend: B,
     redis_store: RedisStore<B::ProofOutput>,
 }
@@ -369,7 +383,10 @@ where
         // Initialize RedisStore
         let redis_store = RedisStore::new().await?;
 
+        let execution_rpc_proxy = execution::Proxy::try_from_env()?;
+
         let service = Self {
+            execution_rpc_proxy,
             proof_backend,
             redis_store,
         };
@@ -405,7 +422,8 @@ where
          */
 
         // todo: here, instead of just bootstrapping client from checkpoint, we might want to call .sync
-        let mut light_client = try_get_client(checkpoint).await?;
+        let mut light_client =
+            try_get_client::<MainnetConsensusSpec, ConsensusRpcProxy>(checkpoint).await?;
         info!(
             target: "proof_service::run",
             "Initialized light client. Finalized slot: {}",
@@ -472,6 +490,104 @@ where
         }
     }
 
+    async fn get_consensus_part_of_inputs<S: ConsensusSpec, R: ConsensusRpc<S>>(
+        &self,
+        request: &ProofRequest,
+    ) -> anyhow::Result<(Inner<S, R>, Vec<Update<S>>, FinalityUpdate<S>)> {
+        let client = try_get_client::<S, R>(request.head_checkpoint)
+            .await
+            .context("Failed to get light client from checkpoint")
+            .map_err(|e| anyhow!(e.to_string()))?;
+
+        let sync_committee_updates = try_get_updates::<S, R>(&client)
+            .await
+            .context("Failed to get sync committee updates")
+            .map_err(|e| anyhow!(e.to_string()))?;
+
+        let finality_update: FinalityUpdate<S> =
+            client.rpc.get_finality_update().await.map_err(|e| {
+                anyhow!(format!(
+                    "Failed to get finality update from consensus RPC: {}",
+                    e
+                ))
+            })?;
+
+        Ok((client, sync_committee_updates, finality_update))
+    }
+
+    /// Fetches the necessary inputs for proof generation based on the request.
+    /// This involves interacting with consensus and execution layer RPC proxies.
+    async fn get_proof_inputs(&self, request: &ProofRequest) -> anyhow::Result<ProofInputs> {
+        let (client, sync_committee_updates, finality_update) = self
+            // todo: this should NOT return Inner. It should just return required parts from consensus RPC calls. No wrapper types like Inner
+            // expected output: (store, expected_current_slot, genesis_root, forks, sync_committee_updates, finality_update, ?execution_block_id)
+            .get_consensus_part_of_inputs::<MainnetConsensusSpec, ConsensusRpcProxy>(request)
+            .await?;
+
+        let latest_finalized_header = finality_update.finalized_header();
+        let expected_current_slot = client.expected_current_slot();
+
+        // Fetch execution layer storage proof
+        let latest_finalized_execution_header = latest_finalized_header
+            .execution()
+            .map_err(|_| anyhow!("No execution header in finality update".to_string()))?;
+
+        let block_id = (*latest_finalized_execution_header.block_number()).into();
+        debug!(target: "proof_service::input", "Fetching storage proof for address {} slot {} at block ID {:?}", request.hub_pool_address, request.storage_slot, block_id);
+
+        // Get execution part of ProofInputs
+        let proof = self
+            .execution_rpc_proxy
+            .get_proof(
+                request.hub_pool_address,
+                vec![request.storage_slot],
+                block_id,
+            )
+            .await
+            .context("Failed to get storage proof using execution provider proxy")
+            .map_err(|e| anyhow!(e.to_string()))?;
+
+        // Assemble the ProofInputs struct
+        let storage_slot = StorageSlot {
+            key: request.storage_slot,
+            expected_value: proof
+                .storage_proof
+                .first()
+                .context("Storage proof vector was empty")
+                .map_err(|e| anyhow!(e.to_string()))?
+                .value,
+            mpt_proof: proof
+                .storage_proof
+                .first()
+                .context("Storage proof vector was empty")
+                .map_err(|e| anyhow!(e.to_string()))?
+                .proof
+                .clone(),
+        };
+
+        let inputs = ProofInputs {
+            sync_committee_updates,
+            finality_update,
+            expected_current_slot,
+            store: client.store.clone(),
+            genesis_root: client.config.chain.genesis_root,
+            forks: client.config.forks.clone(),
+            contract_storage_slots: ContractStorage {
+                address: proof.address,
+                expected_value: alloy_trie::TrieAccount {
+                    nonce: proof.nonce,
+                    balance: proof.balance,
+                    storage_root: proof.storage_hash,
+                    code_hash: proof.code_hash,
+                },
+                mpt_proof: proof.account_proof,
+                storage_slots: vec![storage_slot],
+            },
+        };
+
+        Ok(inputs)
+    }
+
     async fn generate_and_store_proof(
         request: ProofRequest,
         mut proof_service: ProofService<B>,
@@ -520,11 +636,16 @@ where
             }
         });
 
-        let proof_output = proof_service
-            .proof_backend
-            .generate_proof(request.clone())
-            .await;
-        let updated_proof_state = match proof_output {
+        // todo: consider retrying here a couple of times with a substantial delay between retries, e.g. 1 slot
+        let inputs = proof_service.get_proof_inputs(&request).await;
+
+        let proof_output_result = match inputs {
+            Ok(inputs) => proof_service.proof_backend.generate_proof(inputs).await,
+            // If inputs generation errored, just pass it along into proof generation error.
+            Err(e) => Err(anyhow!("{e}")),
+        };
+
+        let updated_proof_state = match proof_output_result {
             Ok(proof_output) => {
                 let mut proof_state = ProofRequestState::new(request.clone());
                 proof_state.status = ProofRequestStatus::Success;

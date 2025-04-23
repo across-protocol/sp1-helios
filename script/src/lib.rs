@@ -1,7 +1,7 @@
 use alloy_primitives::B256;
 use helios_consensus_core::{
     calc_sync_period,
-    consensus_spec::MainnetConsensusSpec,
+    consensus_spec::{ConsensusSpec, MainnetConsensusSpec},
     types::{BeaconBlock, Update},
 };
 use helios_ethereum::{
@@ -34,11 +34,10 @@ pub async fn get_updates(
 }
 
 /// Fetch updates for client
-pub async fn try_get_updates(
-    client: &Inner<MainnetConsensusSpec, ConsensusRpcProxy>,
-) -> anyhow::Result<Vec<Update<MainnetConsensusSpec>>> {
-    let period =
-        calc_sync_period::<MainnetConsensusSpec>(client.store.finalized_header.beacon().slot);
+pub async fn try_get_updates<S: ConsensusSpec, R: ConsensusRpc<S>>(
+    client: &Inner<S, R>,
+) -> anyhow::Result<Vec<Update<S>>> {
+    let period = calc_sync_period::<S>(client.store.finalized_header.beacon().slot);
 
     let updates = client
         .rpc
@@ -124,14 +123,14 @@ pub async fn try_get_checkpoint(slot: u64) -> anyhow::Result<B256> {
 }
 
 /// Setup a client from a checkpoint.
-pub async fn get_client(checkpoint: B256) -> Inner<MainnetConsensusSpec, ConsensusRpcProxy> {
+pub async fn get_client<S: ConsensusSpec, R: ConsensusRpc<S>>(checkpoint: B256) -> Inner<S, R> {
     try_get_client(checkpoint).await.unwrap()
 }
 
 /// Setup a client from a checkpoint.
-pub async fn try_get_client(
+pub async fn try_get_client<S: ConsensusSpec, R: ConsensusRpc<S>>(
     checkpoint: B256,
-) -> anyhow::Result<Inner<MainnetConsensusSpec, ConsensusRpcProxy>> {
+) -> anyhow::Result<Inner<S, R>> {
     let chain_id = std::env::var("SOURCE_CHAIN_ID")
         .map_err(|e| anyhow::anyhow!("Failed to get SOURCE_CHAIN_ID: {}", e))?;
     let network = Network::from_chain_id(
