@@ -12,6 +12,8 @@ use log::warn;
 use reqwest::{Client, Url};
 use std::{env, future::Future, time::Duration};
 
+use super::multiplex;
+
 #[derive(Clone)]
 struct Provider {
     name: String,
@@ -214,5 +216,87 @@ impl ExecutionRpcProxy {
             operation_name,
             max_retries
         ))
+    }
+}
+
+pub struct Proxy {
+    providers: Vec<RootProvider<Http<Client>>>,
+}
+
+impl Proxy {
+    pub fn from_env() -> Self {
+        Self::try_from_env().unwrap()
+    }
+
+    pub fn try_from_env() -> Result<Self> {
+        let mut providers = vec![];
+        let urls_env =
+            env::var("SOURCE_EXECUTION_RPC_URL").context("SOURCE_EXECUTION_RPC_URL not set");
+
+        match urls_env {
+            Ok(urls_str) => {
+                for url_str in urls_str
+                    .split(',')
+                    .map(|s| s.trim())
+                    .filter(|s| !s.is_empty())
+                {
+                    match url_str.parse::<Url>() {
+                        Ok(url) => {
+                            let provider =
+                                ProviderBuilder::new().network::<Ethereum>().on_http(url);
+                            providers.push(provider);
+                        }
+                        Err(e) => {
+                            warn!(
+                                target: "Proxy::from_env",
+                                "Skipping invalid URL '{}': {}", url_str, e
+                            );
+                        }
+                    }
+                }
+            }
+            Err(e) => {
+                warn!(target: "Proxy::from_env", "Failed to read execution URLs: {}", e);
+            }
+        }
+
+        if providers.is_empty() {
+            Err(anyhow!(
+                "No valid execution RPC URLs found in SOURCE_EXECUTION_RPC_URL."
+            ))
+        } else {
+            Ok(Self { providers })
+        }
+    }
+
+    pub async fn get_proof(
+        &self,
+        address: Address,
+        keys: Vec<B256>,
+    ) -> Result<EIP1186AccountProofResponse> {
+        let proof = multiplex(
+            |client| {
+                let keys = keys.clone();
+                Box::pin(async move { Self::get_proof_and_check(client, address, keys).await })
+            },
+            &self.providers,
+        )
+        .await?;
+        Ok(proof)
+    }
+
+    async fn get_proof_and_check(
+        client: RootProvider<Http<Client>>,
+        address: Address,
+        keys: Vec<B256>,
+    ) -> Result<EIP1186AccountProofResponse> {
+        let proof = client.get_proof(address, keys).await;
+        match proof {
+            Ok(proof) => {
+                // todo: check Merkle proof locally here. If errors, return error; if suceeds, return Ok(proof)
+                Ok(proof)
+            }
+            Err(e) => Err(anyhow!("{e}")),
+        }
     }
 }
