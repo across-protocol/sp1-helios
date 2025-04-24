@@ -6,7 +6,7 @@ use crate::{
 use alloy_primitives::hex;
 use anyhow::{anyhow, Context, Result};
 use async_trait::async_trait;
-use tracing::{debug, info, warn};
+use log::{debug, info, warn};
 use sp1_helios_primitives::types::ProofInputs;
 use sp1_sdk::{EnvProver, ProverClient, SP1ProofWithPublicValues, SP1ProvingKey, SP1Stdin};
 use std::sync::Arc;

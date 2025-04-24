@@ -1,7 +1,7 @@
 use crate::api::ProofRequest;
 use alloy_primitives::B256;
 use alloy_rlp::Encodable;
-use tracing::error;
+use log::error;
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use thiserror::Error;
 use utoipa::ToSchema;

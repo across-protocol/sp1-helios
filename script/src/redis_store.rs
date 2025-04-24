@@ -1,7 +1,7 @@
 use crate::types::{ProofId, ProofRequestState, ProofRequestStatus, ProofServiceError};
 use anyhow::{anyhow, Context};
 use helios_consensus_core::types::LightClientHeader;
-use tracing::{debug, info, warn};
+use log::{debug, info, warn};
 use redis::{aio::ConnectionManager, AsyncCommands, Client};
 use serde::{de::DeserializeOwned, Serialize};
 use std::{env, marker::PhantomData, time::Duration};

@@ -6,7 +6,7 @@ use helios_consensus_core::{
     types::{BeaconBlock, Bootstrap, FinalityUpdate, OptimisticUpdate, Update},
 };
 use helios_ethereum::rpc::{http_rpc::HttpRpc, ConsensusRpc};
-use tracing::{info, warn};
+use log::{info, warn};
 use std::{env, time::Duration};
 use tree_hash::TreeHash;
 

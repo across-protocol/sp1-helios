@@ -15,7 +15,7 @@ use axum::{
     routing::{get, post},
     serve, Json, Router,
 };
-use tracing::{error, info};
+use log::{error, info};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use std::str::FromStr;

@@ -26,7 +26,7 @@ use helios_consensus_core::{
     verify_bootstrap,
 };
 use helios_ethereum::{config::Config, rpc::ConsensusRpc};
-use tracing::{debug, info, warn};
+use log::{debug, info, warn};
 use tokio::time::timeout;
 
 use crate::api::ProofRequest;

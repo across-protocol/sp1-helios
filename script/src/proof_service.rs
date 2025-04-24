@@ -16,7 +16,7 @@ use helios_ethereum::rpc::http_rpc::HttpRpc;
 use sp1_helios_primitives::types::{ContractStorage, ProofInputs, StorageSlot};
 use tree_hash::TreeHash;
 
-use tracing::{debug, error, info, warn};
+use log::{debug, error, info, warn};
 use std::env;
 use std::str::FromStr;
 use std::time::Duration;
@@ -74,7 +74,7 @@ where
         let proof_request_state = self.get_proof(&proof_id).await?;
 
         if redis_lock_acquired {
-            tracing::debug!(target: "proof_service::api", "Global lock acquired for new proof request ID: {}", proof_id.to_hex_string());
+            log::debug!(target: "proof_service::api", "Global lock acquired for new proof request ID: {}", proof_id.to_hex_string());
 
             let finalized_header =
                 self.redis_store

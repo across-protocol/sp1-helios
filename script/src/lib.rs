@@ -9,9 +9,8 @@ use helios_ethereum::{
     consensus::Inner,
 };
 use helios_ethereum::{consensus::ConsensusClient, database::ConfigDB, rpc::ConsensusRpc};
-use tracing::info;
+use log::info;
 use rpc_proxies::consensus::ConsensusRpcProxy;
-use tracing_subscriber::{fmt, layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
 
 use std::sync::Arc;
 use tokio::sync::{mpsc::channel, watch};
@@ -197,17 +196,4 @@ pub async fn create_streaming_client(
     info!("config.max_checkpoint_age: {:?}", config.max_checkpoint_age);
 
     ConsensusClient::new(&consensus_rpc, Arc::new(config)).unwrap()
-}
-
-pub fn init_tracing() -> anyhow::Result<()> {
-    // 1) Read RUST_LOG or default to "info"
-    let filter = EnvFilter::try_from_default_env().or_else(|_| EnvFilter::try_new("info"))?;
-
-    // 2) Compose subscriber: console + (later) Slack layer
-    tracing_subscriber::registry()
-        .with(fmt::layer().with_writer(std::io::stdout))
-        .with(filter)
-        .init();
-
-    Ok(())
 }
