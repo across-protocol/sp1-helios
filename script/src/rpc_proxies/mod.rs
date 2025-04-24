@@ -6,7 +6,7 @@ pub mod execution;
 
 /// Takes a closure that produces a future for each provided client, waits for the first succeeding
 /// future and returns its result
-async fn multiplex<F, C, R>(f: F, clients: &[C]) -> Result<R>
+pub async fn multiplex<F, C, R>(f: F, clients: &[C]) -> Result<R>
 where
     F: Fn(C) -> BoxFuture<'static, Result<R>>,
     C: Clone,

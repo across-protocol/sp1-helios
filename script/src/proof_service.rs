@@ -12,16 +12,12 @@ use crate::{
 };
 use alloy::transports::BoxFuture;
 use alloy_primitives::B256;
-use alloy_trie::proof;
 use anyhow::{anyhow, Context, Result};
 use helios_consensus_core::{
     consensus_spec::{ConsensusSpec, MainnetConsensusSpec},
     types::{FinalityUpdate, LightClientHeader, Update},
 };
-use helios_ethereum::{
-    consensus::Inner,
-    rpc::{http_rpc::HttpRpc, ConsensusRpc},
-};
+use helios_ethereum::{consensus::Inner, rpc::ConsensusRpc};
 use sp1_helios_primitives::types::{ContractStorage, ProofInputs, StorageSlot};
 use tree_hash::TreeHash;
 
