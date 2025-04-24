@@ -4,11 +4,10 @@ use alloy::{
     signers::local::PrivateKeySigner, sol,
 };
 use alloy_primitives::{address, b256, B256, U256};
-use anyhow::Result;
+use anyhow::{Context, Result};
 use helios_consensus_core::consensus_spec::MainnetConsensusSpec;
 use helios_ethereum::consensus::Inner;
 use helios_ethereum::rpc::ConsensusRpc;
-use log::{error, info};
 use reqwest::Url;
 use sp1_helios_primitives::types::{ContractStorage, ProofInputs, StorageSlot};
 use sp1_helios_script::rpc_proxies::consensus::ConsensusRpcProxy;
@@ -16,6 +15,7 @@ use sp1_helios_script::*;
 use sp1_sdk::{EnvProver, ProverClient, SP1ProofWithPublicValues, SP1ProvingKey, SP1Stdin};
 use std::env;
 use std::time::Duration;
+use tracing::{error, info};
 use tree_hash::TreeHash;
 
 const ELF: &[u8] = include_bytes!("../../elf/sp1-helios-elf");
@@ -383,7 +383,7 @@ impl SP1HeliosOperator {
 async fn main() -> Result<()> {
     env::set_var("RUST_LOG", "info");
     dotenv::dotenv().ok();
-    env_logger::init();
+    init_tracing().context("failed to set up tracing")?;
 
     let loop_delay_mins = env::var("LOOP_DELAY_MINS")
         .unwrap_or("5".to_string())

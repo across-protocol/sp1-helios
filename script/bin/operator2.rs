@@ -1,5 +1,7 @@
-use log::error;
+use anyhow::Context;
+use sp1_helios_script::init_tracing;
 use sp1_helios_script::proof_backends::sp1::SP1Backend;
+use tracing::error;
 
 use sp1_helios_script::api::start_api_server;
 use sp1_helios_script::proof_service::ProofService;
@@ -7,7 +9,7 @@ use sp1_helios_script::proof_service::ProofService;
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     dotenv::dotenv().ok();
-    env_logger::init();
+    init_tracing().context("failed to set up tracing")?;
 
     let proof_backend = SP1Backend::from_env()?;
     let proof_service = ProofService::new(proof_backend).await?;

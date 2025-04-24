@@ -1,9 +1,10 @@
 #![allow(unused_imports)]
 // Playground
 use alloy::hex;
-use log::info;
-use sp1_helios_script::{get_checkpoint, get_client, redis_store::RedisStore};
+use anyhow::Context;
+use sp1_helios_script::{get_checkpoint, get_client, init_tracing, redis_store::RedisStore};
 use std::env;
+use tracing::info;
 use tree_hash::TreeHash;
 
 // target for slot 11509824: 0x492d9843f2e4c789e5bf239591d0e8e2549f45eb50870a4725c62a74331fac97
@@ -14,7 +15,7 @@ use tree_hash::TreeHash;
 async fn main() -> anyhow::Result<()> {
     env::set_var("RUST_LOG", "info");
     dotenv::dotenv().ok();
-    env_logger::init();
+    init_tracing().context("failed to set up tracing")?;
 
     // Fetch checkpoint from Redis
     let mut redis_store = RedisStore::<String>::new().await?;

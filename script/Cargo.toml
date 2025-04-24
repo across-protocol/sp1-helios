@@ -43,8 +43,6 @@ sp1-helios-primitives = { workspace = true }
 serde = { workspace = true }
 serde_cbor = { workspace = true }
 clap = { workspace = true }
-log = { workspace = true }
-env_logger = { workspace = true }
 alloy-primitives = { workspace = true }
 alloy = { workspace = true }
 anyhow = { workspace = true }
@@ -65,6 +63,8 @@ async-trait = "0.1.88"
 eyre = "0.6.12"
 futures = "0.3.31"
 chrono = "0.4.40"
+tracing = "0.1.41"
+tracing-subscriber = "0.3.19"
 
 [build-dependencies]
 sp1-build = { workspace = true }
