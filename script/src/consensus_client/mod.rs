@@ -1,0 +1,275 @@
+use std::{
+    env,
+    future::Future,
+    sync::Arc,
+    time::{SystemTime, UNIX_EPOCH},
+};
+
+use anyhow::anyhow;
+
+use alloy::{hex, rpc::types::Transaction};
+use alloy_primitives::B256;
+use anyhow::Result;
+use chrono::Duration;
+use futures::{
+    future::{join_all, select_ok},
+    FutureExt,
+};
+use helios_consensus_core::{
+    apply_bootstrap, calc_sync_period,
+    consensus_spec::ConsensusSpec,
+    types::{LightClientStore, Update},
+    verify_bootstrap,
+};
+use helios_ethereum::{config::Config, rpc::ConsensusRpc};
+use log::{info, warn};
+use tokio::time::timeout;
+
+use crate::rpc_proxies::multiplex;
+
+pub const MAX_REQUEST_LIGHT_CLIENT_UPDATES: u8 = 128;
+
+/// A modified implementation of `Inner`, that allows for tight control over multiplexing
+pub struct Client<S: ConsensusSpec, R: ConsensusRpc<S>> {
+    pub config: Arc<Config>,
+    pub store: LightClientStore<S>,
+    rpcs: Vec<R>,
+    last_checkpoint: Option<B256>,
+    // todo? smth like `finalized_block_send: Sender<Block<Transaction>>,`
+}
+
+const CONENSUS_RPCS_ENV_VAR: &str = "CONSENSUS_RPCS_LIST";
+
+impl<S: ConsensusSpec, R: ConsensusRpc<S>> Client<S, R> {
+    pub fn from_env() -> Result<Self> {
+        let chain_id = std::env::var("SOURCE_CHAIN_ID")
+            .map_err(|e| anyhow::anyhow!("Failed to get SOURCE_CHAIN_ID: {}", e))?;
+        let network = helios_ethereum::config::networks::Network::from_chain_id(
+            chain_id
+                .parse()
+                .map_err(|e| anyhow::anyhow!("Failed to parse chain_id: {}", e))?,
+        )
+        .map_err(|_| anyhow::anyhow!("Failed to get network from chain_id: {}", chain_id))?;
+        let base_config = network.to_base_config();
+
+        let config = Config {
+            chain: base_config.chain,
+            forks: base_config.forks,
+            strict_checkpoint_age: false,
+            ..Default::default()
+        };
+
+        // In a simple case, paths_str is a coma-separated list of URLs. But that depends on which
+        // R we're using. Some R's expect these "urls" to have different meaning, e.g. it can be
+        // a name of another env variable with some init params for that R in R::new
+        let paths_str = env::var(CONENSUS_RPCS_ENV_VAR)
+            .expect("ConsensusRpcProxy: No RPC URLs found in environment variable");
+
+        let paths: Vec<&str> = paths_str
+            .split(',')
+            .map(|s| s.trim())
+            .filter(|s| !s.is_empty())
+            .collect();
+
+        Self::new(Arc::new(config), &paths)
+    }
+
+    pub fn new(config: Arc<Config>, paths: &[&str]) -> Result<Self> {
+        assert!(
+            !paths.is_empty(),
+            "ConsensusRpcProxy: No RPC URLs found in environment variable"
+        );
+
+        info!(
+            "Creating ConsensusRPCProxy with {} RPC endpoints",
+            paths.len()
+        );
+
+        info!("Primary endpoint is {}", paths.first().unwrap());
+
+        let rpcs: Vec<R> = paths.iter().map(|path| R::new(path)).collect();
+
+        Ok(Self {
+            config,
+            store: LightClientStore::default(),
+            rpcs,
+            last_checkpoint: None,
+        })
+    }
+
+    pub async fn sync(&mut self, checkpoint: B256) -> Result<()> {
+        self.store = LightClientStore::default();
+        self.last_checkpoint = None;
+
+        self.bootstrap(checkpoint).await?;
+
+        // let updates: Vec<Update<S>> = self.get_updates().await?;
+
+        // for update in updates {
+        //     self.verify_update(&update)?;
+        //     self.apply_update(&update);
+        // }
+        // let finality_update = self.rpc.get_finality_update().await?;
+        // self.verify_finality_update(&finality_update)?;
+        // self.apply_finality_update(&finality_update);
+
+        // info!(
+        //     target: "helios::consensus",
+        //     "consensus client in sync with checkpoint: 0x{}",
+        //     hex::encode(checkpoint)
+        // );
+
+        Ok(())
+    }
+
+    pub async fn bootstrap(&mut self, checkpoint: B256) -> Result<()> {
+        let mut futs = vec![];
+        for rpc in &self.rpcs {
+            // Clone store and launch a future for each rpc that will try to advance it. In the end,
+            // we'll compare results from each rpc to see which one advanced store the most and take
+            // that one
+            let mut store = self.store.clone();
+            let config = self.config.clone();
+            let fut: std::pin::Pin<Box<dyn Future<Output = Result<LightClientStore<S>>> + Send>> = async move {
+                match timeout(std::time::Duration::from_secs(4), async {
+                    let bootstrap = rpc
+                        .get_bootstrap(checkpoint)
+                        .await
+                        .map_err(|e| anyhow::anyhow!("RPC error getting bootstrap: {}", e))?;
+
+                    // Notice: only checks checkpoint's age at this point
+                    let is_valid = config.is_valid_checkpoint(bootstrap.header().beacon().slot);
+
+                    if !is_valid {
+                        if config.strict_checkpoint_age {
+                            return Err(anyhow::anyhow!("ConsensusError::CheckpointTooOld.into()"));
+                        } else {
+                            warn!(target: "helios::consensus", "checkpoint too old, consider using a more recent block");
+                        }
+                    }
+
+                    verify_bootstrap(&bootstrap, checkpoint, &config.forks)
+                        .map_err(|e| anyhow!("{e}"))?;
+                    apply_bootstrap(&mut store, &bootstrap);
+
+                    Ok::<helios_consensus_core::types::LightClientStore<S>, anyhow::Error>(store)
+                }).await {
+                    Ok(Ok(res)) => Ok(res),
+                    Ok(Err(e)) => Err(anyhow!("rpc error: {e}")),
+                    Err(e) => Err(anyhow!("rpc timed out: {e}")),
+                }
+            }.boxed();
+            futs.push(fut);
+        }
+
+        // any of the available non-errored stores is good, because they're all checked against a checkpoint
+        let validated_store = select_ok(futs).await;
+        match validated_store {
+            Ok((store, futs)) => {
+                drop(futs);
+                self.store = store;
+                Ok(())
+            }
+            Err(e) => Err(e),
+        }
+    }
+
+    async fn sync_after_bootstrap(&self) -> Result<()> {
+        todo!()
+    }
+
+    async fn sync_after_bootstrap_single_rpc(&self, rpc: &R) -> Result<LightClientStore<S>> {
+        let expected_current_slot = self.config.expected_current_slot();
+        let current_finalized_slot = self.store.finalized_header.beacon().slot;
+        let updates =
+            Self::get_updates_single_rpc(expected_current_slot, current_finalized_slot, rpc).await;
+
+        Err(anyhow!(""))
+    }
+
+    // pub async fn get_updates(&self) -> Result<Vec<Update<S>>> {
+    //     let expected_current_slot = self.expected_current_slot();
+    //     let current_finalized_slot = self.store.finalized_header.beacon().slot;
+    //     let futs = self.rpcs.iter().map(|rpc| async {
+    //         let updates =
+    //             Self::get_updates_single_rpc(expected_current_slot, current_finalized_slot, rpc)
+    //                 .await;
+    //     });
+
+    //     Err(anyhow!(""))
+    // }
+
+    async fn get_updates_single_rpc(
+        expected_current_slot: u64,
+        current_finalized_slot: u64,
+        rpc: &R,
+    ) -> Result<Vec<Update<S>>> {
+        let expected_current_period = calc_sync_period::<S>(expected_current_slot);
+        let mut next_update_fetch_period = calc_sync_period::<S>(current_finalized_slot);
+
+        let mut updates: Vec<Update<S>> = vec![];
+        if expected_current_period - next_update_fetch_period >= 128 {
+            while next_update_fetch_period < expected_current_period {
+                let batch_size = std::cmp::min(
+                    expected_current_period - next_update_fetch_period,
+                    MAX_REQUEST_LIGHT_CLIENT_UPDATES.into(),
+                );
+                let update = rpc
+                    .get_updates(next_update_fetch_period, batch_size.try_into().unwrap())
+                    .await
+                    .map_err(|e| anyhow!("{e}"))?;
+                updates.extend(update);
+
+                next_update_fetch_period += batch_size;
+            }
+        }
+
+        let update: Vec<Update<S>> = rpc
+            .get_updates(next_update_fetch_period, MAX_REQUEST_LIGHT_CLIENT_UPDATES)
+            .await
+            .map_err(|e| anyhow!("{e}"))?;
+        updates.extend(update);
+
+        Ok(updates)
+    }
+}
+
+trait ConfigExt {
+    fn is_valid_checkpoint(&self, blockhash_slot: u64) -> bool;
+    fn expected_current_slot(&self) -> u64;
+    fn slot_timestamp(&self, slot: u64) -> u64;
+    fn age(&self, slot: u64) -> Duration;
+}
+
+impl<T: std::ops::Deref<Target = Config>> ConfigExt for T {
+    fn is_valid_checkpoint(&self, blockhash_slot: u64) -> bool {
+        let current_slot = self.expected_current_slot();
+        let current_slot_timestamp = self.slot_timestamp(current_slot);
+        let blockhash_slot_timestamp = self.slot_timestamp(blockhash_slot);
+
+        let slot_age = current_slot_timestamp
+            .checked_sub(blockhash_slot_timestamp)
+            .unwrap_or_default();
+
+        slot_age < self.max_checkpoint_age
+    }
+
+    fn expected_current_slot(&self) -> u64 {
+        let now = SystemTime::now();
+        helios_consensus_core::expected_current_slot(now, self.chain.genesis_time)
+    }
+
+    fn slot_timestamp(&self, slot: u64) -> u64 {
+        slot * 12 + self.chain.genesis_time
+    }
+
+    fn age(&self, slot: u64) -> Duration {
+        let expected_time = self.slot_timestamp(slot);
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_else(|_| panic!("unreachable"));
+
+        let delay = now - std::time::Duration::from_secs(expected_time);
+        chrono::Duration::from_std(delay).unwrap()
+    }
+}
