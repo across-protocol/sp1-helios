@@ -9,7 +9,7 @@ use alloy_primitives::{Address, B256};
 use anyhow::anyhow;
 use anyhow::{Context, Result};
 use futures::future::FutureExt;
-use log::warn;
+use tracing::warn;
 use reqwest::{Client, Url};
 use std::{env, time::Duration};
 use tokio::time::timeout;
