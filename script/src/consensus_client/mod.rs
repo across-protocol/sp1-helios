@@ -1,4 +1,5 @@
 use std::{
+    cmp::Ordering,
     env,
     future::Future,
     sync::Arc,
@@ -22,7 +23,7 @@ use helios_consensus_core::{
     verify_bootstrap,
 };
 use helios_ethereum::{config::Config, rpc::ConsensusRpc};
-use log::{info, warn};
+use log::{debug, info, warn};
 use tokio::time::timeout;
 
 pub const MAX_REQUEST_LIGHT_CLIENT_UPDATES: u8 = 128;
@@ -38,7 +39,7 @@ pub struct Client<S: ConsensusSpec, R: ConsensusRpc<S>> {
 
 const CONENSUS_RPCS_ENV_VAR: &str = "CONSENSUS_RPCS_LIST";
 
-impl<S: ConsensusSpec, R: ConsensusRpc<S>> Client<S, R> {
+impl<S: ConsensusSpec, R: ConsensusRpc<S> + std::fmt::Debug> Client<S, R> {
     pub fn from_env() -> Result<Self> {
         let chain_id = std::env::var("SOURCE_CHAIN_ID")
             .map_err(|e| anyhow::anyhow!("Failed to get SOURCE_CHAIN_ID: {}", e))?;
@@ -163,6 +164,10 @@ impl<S: ConsensusSpec, R: ConsensusRpc<S>> Client<S, R> {
         }
     }
 
+    pub async fn advance(&mut self) -> Result<()> {
+        Err(anyhow!(""))
+    }
+
     async fn sync_to_chain(&mut self) -> Result<()> {
         let futs = self.rpcs.iter().map(|rpc| {
             let store = self.store.clone();
@@ -174,8 +179,8 @@ impl<S: ConsensusSpec, R: ConsensusRpc<S>> Client<S, R> {
                 .await
                 {
                     Ok(Ok(res)) => Ok(res),
-                    Ok(Err(err)) => Err(anyhow!("rpc error {err}")),
-                    Err(elapsed) => Err(anyhow!("rpc timed out after {elapsed}")),
+                    Ok(Err(err)) => Err(anyhow!("rpc error {:?} : {err} ", rpc)),
+                    Err(elapsed) => Err(anyhow!("rpc {:?} timed out after {elapsed}", rpc)),
                 }
             }
         });
@@ -190,16 +195,21 @@ impl<S: ConsensusSpec, R: ConsensusRpc<S>> Client<S, R> {
         let mut candidate: Option<(LightClientStore<S>, Option<B256>)> = None;
         for result in results {
             match result {
-                Ok((store, last_checkpoint)) => {
-                    // todo: here, we're only checking for finalized head progression. Should we be checking for something else too, like next_sync_commmittee being set?
-                    if candidate.is_none()
-                        || candidate.as_ref().unwrap().0.finalized_header.beacon().slot
-                            < store.finalized_header.beacon().slot
-                    {
-                        candidate = Some((store, last_checkpoint))
+                Ok((result_store, result_checkpoint)) => {
+                    if let Some((ref candidate_store, _)) = candidate {
+                        match compare_store_advancement(&result_store, candidate_store) {
+                            Ordering::Greater => {
+                                candidate = Some((result_store, result_checkpoint));
+                            }
+                            _ => {}
+                        }
+                    } else {
+                        candidate = Some((result_store, result_checkpoint));
                     }
                 }
-                Err(_) => todo!(),
+                Err(e) => {
+                    debug!("Sync attempt failed for an RPC: {}", e);
+                }
             }
         }
 
@@ -298,6 +308,36 @@ impl<S: ConsensusSpec, R: ConsensusRpc<S>> Client<S, R> {
         updates.extend(update);
 
         Ok(updates)
+    }
+}
+
+/// Compares two LightClientStore instances to determine which is more advanced.
+/// Advancement is primarily determined by the finalized header slot.
+/// If slots are equal, the presence of a next_sync_committee is used as a tie-breaker.
+fn compare_store_advancement<S: ConsensusSpec>(
+    store_a: &LightClientStore<S>,
+    store_b: &LightClientStore<S>,
+) -> Ordering {
+    // Compare finalized header slots
+    match store_a
+        .finalized_header
+        .beacon()
+        .slot
+        .cmp(&store_b.finalized_header.beacon().slot)
+    {
+        Ordering::Less => Ordering::Less,
+        Ordering::Greater => Ordering::Greater,
+        Ordering::Equal => {
+            // If slots are equal, compare sync committee presence
+            match (
+                store_a.next_sync_committee.is_some(),
+                store_b.next_sync_committee.is_some(),
+            ) {
+                (true, false) => Ordering::Greater, // a has committee, b doesn't -> a is more advanced
+                (false, true) => Ordering::Less, // b has committee, a doesn't -> b is more advanced
+                _ => Ordering::Equal, // both have or both don't have -> equally advanced by this metric
+            }
+        }
     }
 }
 
