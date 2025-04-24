@@ -23,7 +23,7 @@ use helios_consensus_core::{
     verify_bootstrap,
 };
 use helios_ethereum::{config::Config, rpc::ConsensusRpc};
-use log::{info, warn};
+use log::{debug, info, warn};
 use tokio::time::timeout;
 
 pub const MAX_REQUEST_LIGHT_CLIENT_UPDATES: u8 = 128;
@@ -167,7 +167,7 @@ impl<S: ConsensusSpec, R: ConsensusRpc<S> + std::fmt::Debug> Client<S, R> {
     }
 
     pub async fn advance(&mut self) -> Result<()> {
-        info!(
+        debug!(
             target: "consensus_client::advance",
             "start"
         );
@@ -183,12 +183,12 @@ impl<S: ConsensusSpec, R: ConsensusRpc<S> + std::fmt::Debug> Client<S, R> {
                 {
                     Ok(Ok(res)) => Ok(res),
                     Ok(Err(err)) => Err(anyhow!("rpc error {:?} : {err} ", rpc)),
-                    Err(elapsed) => Err(anyhow!("rpc {:?} timed out after {elapsed}", rpc)),
+                    Err(elapsed) => Err(anyhow!("rpc error {:?} : {elapsed} ", rpc)),
                 }
             }
         });
 
-        info!(target: "consensus_client::advance", "waiting for response from {} rpcs", futs.len());
+        debug!(target: "consensus_client::advance", "waiting for response from {} rpcs", futs.len());
 
         // Wait for all futures and pick the most advanced store
         let results = join_all(futs).await;
@@ -207,7 +207,10 @@ impl<S: ConsensusSpec, R: ConsensusRpc<S> + std::fmt::Debug> Client<S, R> {
                     }
                 }
                 Err(e) => {
-                    info!("Sync attempt failed for an RPC: {}", e);
+                    debug!(
+                        target: "consensus_client::advance",
+                        "advance errored for rpc {}", e
+                    );
                 }
             }
         }
@@ -287,7 +290,7 @@ impl<S: ConsensusSpec, R: ConsensusRpc<S> + std::fmt::Debug> Client<S, R> {
                 {
                     Ok(Ok(res)) => Ok(res),
                     Ok(Err(err)) => Err(anyhow!("rpc error {:?} : {err} ", rpc)),
-                    Err(elapsed) => Err(anyhow!("rpc {:?} timed out after {elapsed}", rpc)),
+                    Err(elapsed) => Err(anyhow!("rpc error {:?} : {elapsed} ", rpc)),
                 }
             }
         });
@@ -314,7 +317,10 @@ impl<S: ConsensusSpec, R: ConsensusRpc<S> + std::fmt::Debug> Client<S, R> {
                     }
                 }
                 Err(e) => {
-                    info!("Sync attempt failed for an RPC: {}", e);
+                    warn!(
+                        target: "consensus_client::sync_to_chain",
+                        "sync errored for RPC {}", e
+                    );
                 }
             }
         }

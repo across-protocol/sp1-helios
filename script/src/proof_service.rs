@@ -11,8 +11,9 @@ use crate::{
     types::{ProofId, ProofRequestState, ProofRequestStatus, ProofServiceError},
     util::CancellationTokenGuard,
 };
-use alloy::transports::BoxFuture;
+use alloy::{hex, transports::BoxFuture};
 use alloy_primitives::B256;
+use alloy_trie::proof;
 use anyhow::{anyhow, Context, Result};
 use async_trait::async_trait;
 use helios_consensus_core::{
@@ -33,7 +34,7 @@ use std::time::Duration;
 use tokio::time::{interval_at, Instant};
 use tokio_util::sync::CancellationToken;
 
-const ORPHANED_PROOF_LOCK_ACQUIRE_DURATION_MS: u64 = 1000;
+const INITIAL_PROOF_GENERATION_LOCK_DURATION_MS: u64 = 1000;
 
 /// Service responsible for managing the lifecycle of ZK proof generation requests.
 ///
@@ -164,19 +165,14 @@ where
             // Use redis_store to acquire the proof generation lock
             match self
                 .redis_store
-                .acquire_proof_generation_lock(&proof_id, ORPHANED_PROOF_LOCK_ACQUIRE_DURATION_MS)
+                .acquire_proof_generation_lock(&proof_id, INITIAL_PROOF_GENERATION_LOCK_DURATION_MS)
                 .await
             {
                 Ok(true) => {
                     // Lock acquired, spawn generation task.
-                    // The spawned task now receives the proof_id, not the lock_key.
                     tokio::spawn(async move {
-                        Self::generate_and_store_proof(
-                            request,
-                            proof_service_clone,
-                            proof_id, // Pass proof_id
-                        )
-                        .await;
+                        Self::generate_and_store_proof(request, proof_service_clone, proof_id)
+                            .await;
                     });
                 }
                 Ok(false) => {
@@ -210,18 +206,19 @@ where
         &mut self,
         latest_finalized_header: LightClientHeader,
     ) -> Result<bool, ProofServiceError> {
-        // Uses with_global_lock which uses redis_store
         self.with_global_lock(
             latest_finalized_header,
             |this, latest_finalized_header, lock_acquired: bool| {
                 Box::pin(async move {
                     if lock_acquired {
                         this.process_new_finalized_header_locked(latest_finalized_header)
-                            .await
+                            .await?;
+                        // If the above function did not error, stored state in redis is equal or newer than the proposed latest_finalized_header
+                        Ok(true)
                     } else {
-                        // Log instead of returning error if lock not acquired, as another worker might be processing
-                        warn!(target: "proof_service::run", "Could not acquire global lock to process new finalized header. Another worker might be processing.");
-                        Ok(false) // Indicate no update was made by this worker
+                        debug!(target: "proof_service::run", "Could not acquire global lock to process new finalized header. Another worker might be processing.");
+                        // If we failed to acquire the lock, we're not sure what the redis state is and if it's equal or newer to latest_finalized_header. Catiously return false
+                        Ok(false)
                     }
                 })
             },
@@ -233,7 +230,7 @@ where
     async fn process_new_finalized_header_locked(
         &mut self,
         latest_finalized_header: LightClientHeader,
-    ) -> Result<bool, ProofServiceError> {
+    ) -> Result<(), ProofServiceError> {
         let stored_finalized_header = self.redis_store.read_finalized_header().await?;
         let should_update_header: bool = match stored_finalized_header {
             Some(redis_header) => {
@@ -243,7 +240,6 @@ where
         };
 
         if should_update_header {
-            // Use redis_store to find requests
             let waiting_requests = self
                 .redis_store
                 .find_requests_by_status(ProofRequestStatus::WaitingForFinality)
@@ -284,12 +280,11 @@ where
             for request in requests_to_process_further {
                 let proof_id = ProofId::new(&request);
                 let proof_service_clone = self.clone();
-                // Use redis_store to acquire lock
                 match self
                     .redis_store
                     .acquire_proof_generation_lock(
                         &proof_id,
-                        ORPHANED_PROOF_LOCK_ACQUIRE_DURATION_MS,
+                        INITIAL_PROOF_GENERATION_LOCK_DURATION_MS,
                     )
                     .await
                 {
@@ -304,6 +299,7 @@ where
                         });
                     }
                     Ok(false) => {
+                        // Lock was not acquired
                         debug!(
                             target: "proof_service::state",
                             "Skipping proof generation spawn for ID: {}, lock already held.",
@@ -311,6 +307,7 @@ where
                         );
                     }
                     Err(e) => {
+                        // Redis returned an error while trying to acquire lock
                         warn!(
                             target: "proof_service::state",
                             "Failed to acquire lock for proof generation spawn ID: {}: {}",
@@ -320,11 +317,9 @@ where
                     }
                 }
             }
-
-            return Ok(true);
         }
 
-        Ok(false)
+        Ok(())
     }
 
     /*
@@ -333,13 +328,13 @@ where
     2. If not in redis, try get INIT_CHECKPOINT env var.
     3. If neither is present, fail.
     */
-    async fn get_initial_checkpoint(&mut self) -> anyhow::Result<(B256, bool)> {
+    async fn get_initial_checkpoint(&mut self) -> anyhow::Result<B256> {
         // 1. Try Redis
         match self.redis_store.read_finalized_header().await {
             Ok(Some(header)) => {
                 let checkpoint = header.beacon().tree_hash_root();
                 info!(target: "proof_service::init", "Using checkpoint calculated from Redis finalized header (Slot {}): {}", header.beacon().slot, checkpoint);
-                return Ok((checkpoint, true));
+                return Ok(checkpoint);
             }
             Ok(None) => {
                 info!(target: "proof_service::init", "Finalized header not found in Redis. Falling back to env var.");
@@ -361,7 +356,7 @@ where
                         e
                     )
                 })?;
-                Ok((checkpoint, false))
+                Ok(checkpoint)
             }
             Err(_) => {
                 info!(target: "proof_service::init", "Checkpoint not found in env var INIT_CHECKPOINT.");
@@ -499,6 +494,11 @@ where
         mut proof_service: ProofService<B>,
         proof_id: ProofId,
     ) {
+        debug!(
+            target: "proof_service::generate",
+            "[ProofID: {}] Starting proof generation", proof_id.to_hex_string()
+        );
+
         // At this point, this function has exclusive control over this proof_id
         // via the Redis lock acquired before spawning.
         let cancellation_token = CancellationToken::new();
@@ -649,7 +649,7 @@ where
             // Use redis_store to try acquiring the lock
             match self
                 .redis_store
-                .acquire_proof_generation_lock(&proof_id, ORPHANED_PROOF_LOCK_ACQUIRE_DURATION_MS)
+                .acquire_proof_generation_lock(&proof_id, INITIAL_PROOF_GENERATION_LOCK_DURATION_MS)
                 .await
             {
                 Ok(true) => {
@@ -710,32 +710,17 @@ pub async fn run<B>(mut proof_service: ProofService<B>) -> anyhow::Result<()>
 where
     B: ProofBackend + Clone + Send + Sync,
 {
-    let (checkpoint, from_redis) = proof_service.get_initial_checkpoint().await?;
+    let init_checkpoint = proof_service.get_initial_checkpoint().await?;
 
     info!(
         target: "proof_service::run",
         "Initializing light client with checkpoint: {}",
-        checkpoint
+        init_checkpoint
     );
 
-    /*
-    todo:
-    If we're using Inner as our main light client sync "driver", we can't control multiplexing tightly.
-    E.g. if we have one bad endpoint in our backups (say that's out of sync for 2 days, but still returning results)
-    Then we can't get backup rpc calls return reliable results.
-
-    A solution I'm thinking about is creating our own version of Inner. A main thing in our Inner would be Store,
-    that is cloneable. And for each logical opeartion, we could multiplex the *whole opeartion* across different RPCs.
-    The main advantages is that each RPC would have it's own little "container function" which will check integrity of
-    it's outputs. Thus the situations where "we just downloaded a finality update, but then the corresponding committee
-    sync update is not available" should not arise. Or if they do, they'll be confined to a single RPC.
-
-    Main functions we're looking to support are: `.sync` and `.advance`.
-    We can also support additional functions, like: `.get_proof_inputs`
-     */
-
+    // Create light_client. It is our main driver for finality updates / data integrity checks. This function aims to be updating state of this guy
     let mut light_client = consensus_client::Client::<MainnetConsensusSpec, HttpRpc>::from_env()?;
-    light_client.sync(checkpoint).await?;
+    light_client.sync(init_checkpoint).await?;
     info!(
         target: "proof_service::run",
         "Initialized light client. Finalized slot: {}",
@@ -755,27 +740,24 @@ where
         "Starting main loop. Header polling interval: 12s"
     );
 
-    // If we didn't read checkpoint from redis, we should advance redis state, i.e. put finalized header there
-    // todo: How will it work with multiple instances running ? ......... We lock before doing any changes, should be fine.
-    // todo: We can actually set `should_advance_db_state` to true every loop run lol
-    let mut should_advance_db_state = !from_redis;
+    let mut should_advance_redis_state = true;
     loop {
-        if should_advance_db_state {
+        if should_advance_redis_state {
             let res = proof_service
                 .process_new_finalized_header(light_client.store.finalized_header.clone())
                 .await;
 
             match res {
-                Ok(updated) => {
-                    if updated {
-                        info!(target: "proof_service::run", "Advanced Redis state to finalized header slot: {}", light_client.store.finalized_header.beacon().slot)
+                Ok(header_equal_or_newer) => {
+                    if header_equal_or_newer {
+                        info!(target: "proof_service::run", "Redis state set to equal or newer than slot {}", light_client.store.finalized_header.beacon().slot);
+                        should_advance_redis_state = false;
                     } else {
-                        warn!(target: "proof_service::run", "Redis state advancement called but no update occurred for slot: {}", light_client.store.finalized_header.beacon().slot)
+                        debug!(target: "proof_service::run", "Redis state advancement called but no update occurred for slot {}", light_client.store.finalized_header.beacon().slot);
                     }
-                    should_advance_db_state = false;
                 }
                 Err(e) => {
-                    warn!(target: "proof_service::run", "Failed to advance Redis state for finalized header slot {}. Error: {}", light_client.store.finalized_header.beacon().slot, e)
+                    warn!(target: "proof_service::run", "Failed to advance Redis state for finalized header slot {}. Error: {}", light_client.store.finalized_header.beacon().slot, e);
                 }
             }
         }
@@ -788,7 +770,6 @@ where
         let _ = interval.tick().await;
 
         let prev_finalized_slot = light_client.store.finalized_header.beacon().slot;
-        // todo: multiplex this via a new Inner replacement client
         let res = light_client.advance().await;
         if let Err(err) = res {
             warn!(target: "proof_service::run", "Helios light client advance error: {}", err);
@@ -801,7 +782,7 @@ where
                 "Helios light client advanced. Finalized slot: {} -> {}",
                 prev_finalized_slot, new_finalized_slot
             );
-            should_advance_db_state = true;
+            should_advance_redis_state = true;
         }
     }
 }
