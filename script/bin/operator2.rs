@@ -1,13 +1,11 @@
 use log::error;
 use sp1_helios_script::proof_backends::sp1::SP1Backend;
-use std::env;
 
 use sp1_helios_script::api::start_api_server;
 use sp1_helios_script::proof_service::ProofService;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    env::set_var("RUST_LOG", "info");
     dotenv::dotenv().ok();
     env_logger::init();
 
