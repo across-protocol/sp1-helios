@@ -19,7 +19,7 @@ use futures::{
 use helios_consensus_core::{
     apply_bootstrap, calc_sync_period,
     consensus_spec::ConsensusSpec,
-    types::{LightClientStore, Update},
+    types::{FinalityUpdate, LightClientStore, Update},
     verify_bootstrap,
 };
 use helios_ethereum::{config::Config, rpc::ConsensusRpc};
@@ -121,7 +121,7 @@ impl<S: ConsensusSpec, R: ConsensusRpc<S> + std::fmt::Debug> Client<S, R> {
             let mut store = self.store.clone();
             let config = self.config.clone();
             let fut: std::pin::Pin<Box<dyn Future<Output = Result<LightClientStore<S>>> + Send>> = async move {
-                match timeout(std::time::Duration::from_secs(4), async {
+                match timeout(std::time::Duration::from_secs(12), async {
                     let bootstrap = rpc
                         .get_bootstrap(checkpoint)
                         .await
@@ -165,7 +165,103 @@ impl<S: ConsensusSpec, R: ConsensusRpc<S> + std::fmt::Debug> Client<S, R> {
     }
 
     pub async fn advance(&mut self) -> Result<()> {
-        Err(anyhow!(""))
+        let futs = self.rpcs.iter().map(|rpc| {
+            let store = self.store.clone();
+            let config = self.config.clone();
+            async move {
+                match timeout(std::time::Duration::from_secs(4), async move {
+                    Self::advance_single_rpc(store, config, rpc).await
+                })
+                .await
+                {
+                    Ok(Ok(res)) => Ok(res),
+                    Ok(Err(err)) => Err(anyhow!("rpc error {:?} : {err} ", rpc)),
+                    Err(elapsed) => Err(anyhow!("rpc {:?} timed out after {elapsed}", rpc)),
+                }
+            }
+        });
+
+        // Wait for all futures and pick the most advanced store
+        let results = join_all(futs).await;
+        let mut candidate: Option<LightClientStore<S>> = None;
+        for result in results {
+            match result {
+                Ok(result_store) => {
+                    if let Some(ref candidate_store) = candidate {
+                        match compare_store_advancement(&result_store, candidate_store) {
+                            Ordering::Greater => {
+                                candidate = Some(result_store);
+                            }
+                            _ => {}
+                        }
+                    } else {
+                        candidate = Some(result_store);
+                    }
+                }
+                Err(e) => {
+                    debug!("Sync attempt failed for an RPC: {}", e);
+                }
+            }
+        }
+
+        // todo: log that we successfully advanced
+
+        if candidate.is_some() {
+            self.store = candidate.unwrap();
+            Ok(())
+        } else {
+            Err(anyhow!("all rpcs failed"))
+        }
+    }
+
+    async fn advance_single_rpc(
+        mut store: LightClientStore<S>,
+        config: Arc<Config>,
+        rpc: &R,
+    ) -> Result<LightClientStore<S>> {
+        let mut last_checkpoint: Option<B256> = None;
+        let finality_update = rpc
+            .get_finality_update()
+            .await
+            .map_err(|e| anyhow!("{e}"))?;
+
+        helios_consensus_core::verify_finality_update::<S>(
+            &finality_update,
+            config.expected_current_slot(),
+            &store,
+            config.chain.genesis_root,
+            &config.forks,
+        )
+        .map_err(|e| anyhow!("{e}"))?;
+
+        Self::apply_finality_update(&mut last_checkpoint, &mut store, &finality_update);
+
+        if store.next_sync_committee.is_none() {
+            debug!(target: "helios::consensus", "checking for sync committee update");
+            let current_period = calc_sync_period::<S>(store.finalized_header.beacon().slot);
+            let mut updates = rpc
+                .get_updates(current_period, 1)
+                .await
+                .map_err(|e| anyhow!("{e}"))?;
+
+            if updates.len() == 1 {
+                let update = updates.get_mut(0).unwrap();
+                let res = helios_consensus_core::verify_update::<S>(
+                    update,
+                    config.expected_current_slot(),
+                    &store,
+                    config.chain.genesis_root,
+                    &config.forks,
+                )
+                .map_err(|e| anyhow!("{e}"));
+
+                if res.is_ok() {
+                    Self::apply_update(&mut last_checkpoint, &mut store, update);
+                }
+            }
+        }
+
+        Ok(store)
     }
 
     async fn sync_to_chain(&mut self) -> Result<()> {
@@ -246,10 +342,7 @@ impl<S: ConsensusSpec, R: ConsensusRpc<S> + std::fmt::Debug> Client<S, R> {
                 &config.forks,
             )
             .map_err(|e| anyhow!("{e}"))?;
-            let new_checkpoint = helios_consensus_core::apply_update::<S>(&mut store, update);
-            if new_checkpoint.is_some() {
-                last_checkpoint = new_checkpoint;
-            }
+            Self::apply_update(&mut last_checkpoint, &mut store, update);
         }
 
         let finality_update = rpc
@@ -266,11 +359,7 @@ impl<S: ConsensusSpec, R: ConsensusRpc<S> + std::fmt::Debug> Client<S, R> {
         )
         .map_err(|e| anyhow!("{e}"))?;
 
-        let new_checkpoint =
-            helios_consensus_core::apply_finality_update::<S>(&mut store, &finality_update);
-        if new_checkpoint.is_some() {
-            last_checkpoint = new_checkpoint;
-        }
+        Self::apply_finality_update(&mut last_checkpoint, &mut store, &finality_update);
 
         // If we're at this point, all verifications succeeded so we just return resulting store and checkpoint
         Ok((store, last_checkpoint))
@@ -308,6 +397,30 @@ impl<S: ConsensusSpec, R: ConsensusRpc<S> + std::fmt::Debug> Client<S, R> {
         updates.extend(update);
 
         Ok(updates)
+    }
+
+    /// A helper function to never forget updating checkpoint
+    fn apply_update(
+        checkpoint: &mut Option<B256>,
+        store: &mut LightClientStore<S>,
+        update: &Update<S>,
+    ) {
+        let new_checkpoint = helios_consensus_core::apply_update::<S>(store, update);
+        if new_checkpoint.is_some() {
+            *checkpoint = new_checkpoint;
+        }
+    }
+
+    /// A helper function to never forget updating checkpoint
+    fn apply_finality_update(
+        checkpoint: &mut Option<B256>,
+        store: &mut LightClientStore<S>,
+        update: &FinalityUpdate<S>,
+    ) {
+        let new_checkpoint = helios_consensus_core::apply_finality_update::<S>(store, update);
+        if new_checkpoint.is_some() {
+            *checkpoint = new_checkpoint;
+        }
     }
 }
 
