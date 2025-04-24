@@ -8,7 +8,7 @@ use std::{
 
 use anyhow::anyhow;
 
-use alloy::hex;
+use alloy::hex::{self};
 use alloy_primitives::B256;
 use anyhow::Result;
 use chrono::Duration;
@@ -23,21 +23,21 @@ use helios_consensus_core::{
     verify_bootstrap,
 };
 use helios_ethereum::{config::Config, rpc::ConsensusRpc};
-use log::{debug, info, warn};
+use log::{info, warn};
 use tokio::time::timeout;
 
 pub const MAX_REQUEST_LIGHT_CLIENT_UPDATES: u8 = 128;
+const CONENSUS_RPCS_ENV_VAR: &str = "CONSENSUS_RPCS_LIST";
 
 /// A modified implementation of `Inner`, that allows for tight control over multiplexing
 pub struct Client<S: ConsensusSpec, R: ConsensusRpc<S>> {
     pub config: Arc<Config>,
     pub store: LightClientStore<S>,
     rpcs: Vec<R>,
+    // todo? Honestly, this last_checkpoint is not used for much. We could be logging it for easier debug, but ...
     last_checkpoint: Option<B256>,
     // todo? smth like `finalized_block_send: Sender<Block<Transaction>>,`
 }
-
-const CONENSUS_RPCS_ENV_VAR: &str = "CONSENSUS_RPCS_LIST";
 
 impl<S: ConsensusSpec, R: ConsensusRpc<S> + std::fmt::Debug> Client<S, R> {
     pub fn from_env() -> Result<Self> {
@@ -79,14 +79,14 @@ impl<S: ConsensusSpec, R: ConsensusRpc<S> + std::fmt::Debug> Client<S, R> {
             "ConsensusRpcProxy: No RPC URLs found in environment variable"
         );
 
-        info!(
-            "Creating ConsensusRPCProxy with {} RPC endpoints",
-            paths.len()
-        );
-
-        info!("Primary endpoint is {}", paths.first().unwrap());
-
         let rpcs: Vec<R> = paths.iter().map(|path| R::new(path)).collect();
+
+        info!(
+            target: "consensus_client::new",
+            "creating client with {} RPC endpoints: {:?}",
+            rpcs.len(),
+            rpcs
+        );
 
         Ok(Self {
             config,
@@ -104,9 +104,9 @@ impl<S: ConsensusSpec, R: ConsensusRpc<S> + std::fmt::Debug> Client<S, R> {
         self.sync_to_chain().await?;
 
         info!(
-            target: "helios::consensus",
-            "consensus client in sync with checkpoint: 0x{}",
-            hex::encode(checkpoint)
+            target: "consensus_client::sync",
+            "in sync with checkpoint: 0x{}",
+            hex::encode(self.last_checkpoint.unwrap_or_default())
         );
 
         Ok(())
@@ -134,7 +134,7 @@ impl<S: ConsensusSpec, R: ConsensusRpc<S> + std::fmt::Debug> Client<S, R> {
                         if config.strict_checkpoint_age {
                             return Err(anyhow::anyhow!("ConsensusError::CheckpointTooOld.into()"));
                         } else {
-                            warn!(target: "helios::consensus", "checkpoint too old, consider using a more recent block");
+                            warn!(target: "consensus_client::bootstrap", "checkpoint too old, consider using a more recent block");
                         }
                     }
 
@@ -158,6 +158,8 @@ impl<S: ConsensusSpec, R: ConsensusRpc<S> + std::fmt::Debug> Client<S, R> {
             Ok((store, futs)) => {
                 drop(futs);
                 self.store = store;
+                // todo: this is a deviation from helios logic, but I'm 99% it's warranted
+                self.last_checkpoint = Some(checkpoint);
                 Ok(())
             }
             Err(e) => Err(e),
@@ -165,6 +167,11 @@ impl<S: ConsensusSpec, R: ConsensusRpc<S> + std::fmt::Debug> Client<S, R> {
     }
 
     pub async fn advance(&mut self) -> Result<()> {
+        info!(
+            target: "consensus_client::advance",
+            "start"
+        );
+
         let futs = self.rpcs.iter().map(|rpc| {
             let store = self.store.clone();
             let config = self.config.clone();
@@ -181,25 +188,26 @@ impl<S: ConsensusSpec, R: ConsensusRpc<S> + std::fmt::Debug> Client<S, R> {
             }
         });
 
+        info!(target: "consensus_client::advance", "waiting for response from {} rpcs", futs.len());
+
         // Wait for all futures and pick the most advanced store
         let results = join_all(futs).await;
-        let mut candidate: Option<LightClientStore<S>> = None;
+        let mut candidate: Option<(LightClientStore<S>, Option<B256>)> = None;
         for result in results {
             match result {
-                Ok(result_store) => {
-                    if let Some(ref candidate_store) = candidate {
-                        match compare_store_advancement(&result_store, candidate_store) {
-                            Ordering::Greater => {
-                                candidate = Some(result_store);
-                            }
-                            _ => {}
+                Ok((result_store, result_checkpoint)) => {
+                    if let Some((ref candidate_store, _)) = candidate {
+                        if compare_store_advancement(&result_store, candidate_store)
+                            == Ordering::Greater
+                        {
+                            candidate = Some((result_store, result_checkpoint));
                         }
                     } else {
-                        candidate = Some(result_store);
+                        candidate = Some((result_store, result_checkpoint));
                     }
                 }
                 Err(e) => {
-                    debug!("Sync attempt failed for an RPC: {}", e);
+                    info!("Sync attempt failed for an RPC: {}", e);
                 }
             }
         }
@@ -207,7 +215,9 @@ impl<S: ConsensusSpec, R: ConsensusRpc<S> + std::fmt::Debug> Client<S, R> {
         // todo: log that we successfully advanced
 
         if candidate.is_some() {
-            self.store = candidate.unwrap();
+            let (store, last_checkpoint) = candidate.unwrap();
+            self.apply_store_update(store, last_checkpoint);
+
             Ok(())
         } else {
             Err(anyhow!("all rpcs failed"))
@@ -218,7 +228,8 @@ impl<S: ConsensusSpec, R: ConsensusRpc<S> + std::fmt::Debug> Client<S, R> {
         mut store: LightClientStore<S>,
         config: Arc<Config>,
         rpc: &R,
-    ) -> Result<LightClientStore<S>> {
+    ) -> Result<(LightClientStore<S>, Option<B256>)> {
+        // todo: why is last_checkpoint not used?
         let mut last_checkpoint: Option<B256> = None;
         let finality_update = rpc
             .get_finality_update()
@@ -237,7 +248,7 @@ impl<S: ConsensusSpec, R: ConsensusRpc<S> + std::fmt::Debug> Client<S, R> {
         Self::apply_finality_update(&mut last_checkpoint, &mut store, &finality_update);
 
         if store.next_sync_committee.is_none() {
-            debug!(target: "helios::consensus", "checking for sync committee update");
+            info!(target: "consensus_client::advance_single_rpc", "checking for sync committee update");
             let current_period = calc_sync_period::<S>(store.finalized_header.beacon().slot);
             let mut updates = rpc
                 .get_updates(current_period, 1)
@@ -261,7 +272,7 @@ impl<S: ConsensusSpec, R: ConsensusRpc<S> + std::fmt::Debug> Client<S, R> {
             }
         }
 
-        Ok(store)
+        Ok((store, last_checkpoint))
     }
 
     async fn sync_to_chain(&mut self) -> Result<()> {
@@ -293,28 +304,25 @@ impl<S: ConsensusSpec, R: ConsensusRpc<S> + std::fmt::Debug> Client<S, R> {
             match result {
                 Ok((result_store, result_checkpoint)) => {
                     if let Some((ref candidate_store, _)) = candidate {
-                        match compare_store_advancement(&result_store, candidate_store) {
-                            Ordering::Greater => {
-                                candidate = Some((result_store, result_checkpoint));
-                            }
-                            _ => {}
+                        if compare_store_advancement(&result_store, candidate_store)
+                            == Ordering::Greater
+                        {
+                            candidate = Some((result_store, result_checkpoint));
                         }
                     } else {
                         candidate = Some((result_store, result_checkpoint));
                     }
                 }
                 Err(e) => {
-                    debug!("Sync attempt failed for an RPC: {}", e);
+                    info!("Sync attempt failed for an RPC: {}", e);
                 }
             }
         }
 
         if candidate.is_some() {
             let (store, last_checkpoint) = candidate.unwrap();
-            self.store = store;
-            if last_checkpoint.is_some() {
-                self.last_checkpoint = last_checkpoint;
-            }
+            self.apply_store_update(store, last_checkpoint);
+
             Ok(())
         } else {
             Err(anyhow!("all rpcs failed"))
@@ -421,6 +429,52 @@ impl<S: ConsensusSpec, R: ConsensusRpc<S> + std::fmt::Debug> Client<S, R> {
         if new_checkpoint.is_some() {
             *checkpoint = new_checkpoint;
         }
+    }
+
+    /// A helper function to never forget updating checkpoint
+    fn apply_store_update(&mut self, new_store: LightClientStore<S>, new_checkpoint: Option<B256>) {
+        let prev_finalized_slot = self.store.finalized_header.beacon().slot;
+        let prev_optimistic_slot = self.store.optimistic_header.beacon().slot;
+        self.store = new_store;
+        let new_finalized_slot = self.store.finalized_header.beacon().slot;
+        let new_optimistic_slot = self.store.optimistic_header.beacon().slot;
+        if new_checkpoint.is_some() {
+            self.last_checkpoint = new_checkpoint;
+        }
+        if new_finalized_slot != prev_finalized_slot {
+            self.log_finality_update();
+        }
+        if new_optimistic_slot != prev_optimistic_slot {
+            self.log_optimistic_update()
+        }
+    }
+
+    fn log_finality_update(&self) {
+        let age = self.config.age(self.store.finalized_header.beacon().slot);
+
+        info!(
+            target: "consensus_client::update",
+            "finalized slot             slot={}  age={:02}:{:02}:{:02}:{:02}",
+            self.store.finalized_header.beacon().slot,
+            age.num_days(),
+            age.num_hours() % 24,
+            age.num_minutes() % 60,
+            age.num_seconds() % 60,
+        );
+    }
+
+    fn log_optimistic_update(&self) {
+        let age = self.config.age(self.store.optimistic_header.beacon().slot);
+
+        info!(
+            target: "consensus_client::update",
+            "updated head               slot={}  age={:02}:{:02}:{:02}:{:02}",
+            self.store.optimistic_header.beacon().slot,
+            age.num_days(),
+            age.num_hours() % 24,
+            age.num_minutes() % 60,
+            age.num_seconds() % 60,
+        );
     }
 }
 
