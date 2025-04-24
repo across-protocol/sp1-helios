@@ -1,5 +1,5 @@
+#![allow(unused_imports)]
 // Playground
-
 use alloy::hex;
 use log::info;
 use sp1_helios_script::{get_checkpoint, get_client, redis_store::RedisStore};

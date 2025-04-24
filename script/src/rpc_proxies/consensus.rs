@@ -1,26 +1,14 @@
-use alloy::{eips::BlockId, primitives::B256};
-use anyhow::anyhow;
+use alloy::primitives::B256;
 use async_trait::async_trait;
 use eyre::{eyre, Result};
 use helios_consensus_core::{
     consensus_spec::ConsensusSpec,
-    types::{
-        BeaconBlock, Bootstrap, FinalityUpdate, Forks, LightClientStore, OptimisticUpdate, Update,
-    },
+    types::{BeaconBlock, Bootstrap, FinalityUpdate, OptimisticUpdate, Update},
 };
 use helios_ethereum::rpc::{http_rpc::HttpRpc, ConsensusRpc};
 use log::{info, warn};
-use std::{env, marker::PhantomData, time::Duration};
+use std::{env, time::Duration};
 use tree_hash::TreeHash;
-
-use crate::api::ProofRequest;
-
-// Required functionality:
-// 1. todo: prob. removing this stage alltogether. try_get_checkpoint(request.stored_contract_head) -- can create a separate fn for this that checks for head consistency as well. No client needed
-// 2. try_get_client(checkpoint): client is calling "bootstrap" on the given checkpoint. Given that the checkpoint is valid (checked on prev. stage), client can accept input from any RPC.
-// 3. try_get_updates(&client): this is just an rpc call. Can create a custom fn for this. E.g. with update validity check against the current client state
-// todo: what's with this stage? Can't I get a finality update for a specific slot?
-// 4. client.rpc.get_finality_update(): just an rpc call again. Can also check against client state (e.g. after applying sync committee updates)
 
 /// Wraps `helios_ethereum::rpc::http_rpc::HttpRpc`. Provides extra functionality:
 ///   - multiplexing to multiple configured clients
@@ -301,47 +289,3 @@ impl<S: ConsensusSpec> ConsensusRpc<S> for ConsensusRpcProxy {
             .ok_or_else(|| eyre::eyre!("Failed to fetch chain_id from any backups"))
     }
 }
-
-// /// A proxy over multiple consensus clients. Does multiplexing, http request timeouts and output
-// /// consistency checks
-// struct Proxy<S: ConsensusSpec> {
-//     rpcs: Vec<HttpRpc>,
-//     _phantom: PhantomData<S>,
-// }
-
-// struct ConsensusProofInputs<S: ConsensusSpec> {
-//     store: LightClientStore<S>,
-//     expected_current_slot: u64,
-//     genesis_root: B256,
-//     forks: Forks,
-//     sync_committee_updates: Vec<Update<S>>,
-//     finality_update: FinalityUpdate<S>,
-//     execution_block_id: BlockId,
-// }
-
-// impl<S: ConsensusSpec> Proxy<S> {
-//     pub async fn get_consensus_proof_inputs(
-//         &self,
-//         request: &ProofRequest,
-//     ) -> anyhow::Result<ConsensusProofInputs<S>> {
-//         let client = try_get_client::<S, R>(request.head_checkpoint)
-//             .await
-//             .context("Failed to get light client from checkpoint")
-//             .map_err(|e| anyhow!(e.to_string()))?;
-
-//         let sync_committee_updates = try_get_updates::<S, R>(&client)
-//             .await
-//             .context("Failed to get sync committee updates")
-//             .map_err(|e| anyhow!(e.to_string()))?;
-
-//         let finality_update: FinalityUpdate<S> =
-//             client.rpc.get_finality_update().await.map_err(|e| {
-//                 anyhow!(format!(
-//                     "Failed to get finality update from consensus RPC: {}",
-//                     e
-//                 ))
-//             })?;
-
-//         Err(anyhow!(""))
-//     }
-// }

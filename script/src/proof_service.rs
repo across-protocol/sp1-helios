@@ -659,6 +659,7 @@ can be used as a safe feature-complete alternative to a more dangerous Consensus
 not battle-tested, but has good multiplexing capabilities
  */
 
+#[allow(dead_code)]
 #[async_trait]
 trait LightClient {
     async fn advance(&self);
