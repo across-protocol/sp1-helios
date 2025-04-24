@@ -13,6 +13,7 @@ use crate::{
 use alloy::transports::BoxFuture;
 use alloy_primitives::B256;
 use anyhow::{anyhow, Context, Result};
+use async_trait::async_trait;
 use helios_consensus_core::{
     consensus_spec::{ConsensusSpec, MainnetConsensusSpec},
     types::{FinalityUpdate, LightClientHeader, Update},
@@ -391,101 +392,6 @@ where
         Ok(service)
     }
 
-    /// Run the proof service, periodically checking for new finalized headers
-    pub async fn run(mut self) -> anyhow::Result<()> {
-        let (checkpoint, from_redis) = self.get_initial_checkpoint().await?;
-
-        info!(
-            target: "proof_service::run",
-            "Initializing light client with checkpoint: {}",
-            checkpoint
-        );
-
-        /*
-        todo:
-        If we're using Inner as our main light client sync "driver", we can't control multiplexing tightly.
-        E.g. if we have one bad endpoint in our backups (say that's out of sync for 2 days, but still returning results)
-        Then we can't get backup rpc calls return reliable results.
-
-        A solution I'm thinking about is creating our own version of Inner. A main thing in our Inner would be Store,
-        that is cloneable. And for each logical opeartion, we could multiplex the *whole opeartion* across different RPCs.
-        The main advantages is that each RPC would have it's own little "container function" which will check integrity of
-        it's outputs. Thus the situations where "we just downloaded a finality update, but then the corresponding committee
-        sync update is not available" should not arise. Or if they do, they'll be confined to a single RPC.
-
-        Main functions we're looking to support are: `.sync` and `.advance`.
-        We can also support additional functions, like: `.get_proof_inputs`
-         */
-
-        // todo: here, instead of just bootstrapping client from checkpoint, we might want to call .sync
-        let mut light_client =
-            try_get_client::<MainnetConsensusSpec, ConsensusRpcProxy>(checkpoint).await?;
-        info!(
-            target: "proof_service::run",
-            "Initialized light client. Finalized slot: {}",
-            light_client.store.finalized_header.beacon().slot
-        );
-
-        let next_slot_time =
-            Instant::now() + light_client.duration_until_next_update().to_std().unwrap();
-        let mut interval = interval_at(next_slot_time, std::time::Duration::from_secs(12));
-
-        info!(
-            target: "proof_service::run",
-            "Starting main loop. Header polling interval: 12s"
-        );
-
-        // If we didn't read checkpoint from redis, we should advance redis state, i.e. put finalized header there
-        // todo: How will it work with multiple instances running ? ......... We lock before doing any changes, should be fine.
-        // todo: We can actually set `should_advance_db_state` to true every loop run lol
-        let mut should_advance_db_state = !from_redis;
-        loop {
-            if should_advance_db_state {
-                let res = self
-                    .process_new_finalized_header(light_client.store.finalized_header.clone())
-                    .await;
-
-                match res {
-                    Ok(updated) => {
-                        if updated {
-                            info!(target: "proof_service::run", "Advanced Redis state to finalized header slot: {}", light_client.store.finalized_header.beacon().slot)
-                        } else {
-                            warn!(target: "proof_service::run", "Redis state advancement called but no update occurred for slot: {}", light_client.store.finalized_header.beacon().slot)
-                        }
-                        should_advance_db_state = false;
-                    }
-                    Err(e) => {
-                        warn!(target: "proof_service::run", "Failed to advance Redis state for finalized header slot {}. Error: {}", light_client.store.finalized_header.beacon().slot, e)
-                    }
-                }
-            }
-
-            // Periodically check for and pick up orphaned proof generation tasks
-            if let Err(e) = self.restart_orphaned_proofs().await {
-                warn!(target: "proof_service::run", "Error during orphaned proof pickup check: {}", e);
-            }
-
-            let _ = interval.tick().await;
-
-            let prev_finalized_slot = light_client.store.finalized_header.beacon().slot;
-            // todo: multiplex this via a new Inner replacement client
-            let res = light_client.advance().await;
-            if let Err(err) = res {
-                warn!(target: "proof_service::run", "Helios light client advance error: {}", err);
-                continue;
-            }
-            let new_finalized_slot = light_client.store.finalized_header.beacon().slot;
-            if new_finalized_slot > prev_finalized_slot {
-                info!(
-                    target: "proof_service::run",
-                    "Helios light client advanced. Finalized slot: {} -> {}",
-                    prev_finalized_slot, new_finalized_slot
-                );
-                should_advance_db_state = true;
-            }
-        }
-    }
-
     async fn get_consensus_part_of_inputs<S: ConsensusSpec, R: ConsensusRpc<S>>(
         &self,
         request: &ProofRequest,
@@ -777,6 +683,119 @@ where
         }
 
         Ok(())
+    }
+}
+
+/*
+!todo:
+If we want to support different versions of LightClient: e.g. Inner vs custom ConsensusClient impl,
+we should use LC: LightClient as a generic type for run function. Then Inner with a simple HttpRpc
+can be used as a safe feature-complete alternative to a more dangerous ConsensusClient impl that is
+not battle-tested, but has good multiplexing capabilities
+ */
+
+#[async_trait]
+trait LightClient {
+    async fn advance(&self);
+    async fn sync(&self);
+    // etc.
+}
+
+/// Run the proof service, periodically checking for new finalized headers
+pub async fn run<B>(mut proof_service: ProofService<B>) -> anyhow::Result<()>
+where
+    B: ProofBackend + Clone + Send + Sync,
+{
+    let (checkpoint, from_redis) = proof_service.get_initial_checkpoint().await?;
+
+    info!(
+        target: "proof_service::run",
+        "Initializing light client with checkpoint: {}",
+        checkpoint
+    );
+
+    /*
+    todo:
+    If we're using Inner as our main light client sync "driver", we can't control multiplexing tightly.
+    E.g. if we have one bad endpoint in our backups (say that's out of sync for 2 days, but still returning results)
+    Then we can't get backup rpc calls return reliable results.
+
+    A solution I'm thinking about is creating our own version of Inner. A main thing in our Inner would be Store,
+    that is cloneable. And for each logical opeartion, we could multiplex the *whole opeartion* across different RPCs.
+    The main advantages is that each RPC would have it's own little "container function" which will check integrity of
+    it's outputs. Thus the situations where "we just downloaded a finality update, but then the corresponding committee
+    sync update is not available" should not arise. Or if they do, they'll be confined to a single RPC.
+
+    Main functions we're looking to support are: `.sync` and `.advance`.
+    We can also support additional functions, like: `.get_proof_inputs`
+     */
+
+    // todo: here, instead of just bootstrapping client from checkpoint, we might want to call .sync
+    let mut light_client =
+        try_get_client::<MainnetConsensusSpec, ConsensusRpcProxy>(checkpoint).await?;
+    info!(
+        target: "proof_service::run",
+        "Initialized light client. Finalized slot: {}",
+        light_client.store.finalized_header.beacon().slot
+    );
+
+    let next_slot_time =
+        Instant::now() + light_client.duration_until_next_update().to_std().unwrap();
+    let mut interval = interval_at(next_slot_time, std::time::Duration::from_secs(12));
+
+    info!(
+        target: "proof_service::run",
+        "Starting main loop. Header polling interval: 12s"
+    );
+
+    // If we didn't read checkpoint from redis, we should advance redis state, i.e. put finalized header there
+    // todo: How will it work with multiple instances running ? ......... We lock before doing any changes, should be fine.
+    // todo: We can actually set `should_advance_db_state` to true every loop run lol
+    let mut should_advance_db_state = !from_redis;
+    loop {
+        if should_advance_db_state {
+            let res = proof_service
+                .process_new_finalized_header(light_client.store.finalized_header.clone())
+                .await;
+
+            match res {
+                Ok(updated) => {
+                    if updated {
+                        info!(target: "proof_service::run", "Advanced Redis state to finalized header slot: {}", light_client.store.finalized_header.beacon().slot)
+                    } else {
+                        warn!(target: "proof_service::run", "Redis state advancement called but no update occurred for slot: {}", light_client.store.finalized_header.beacon().slot)
+                    }
+                    should_advance_db_state = false;
+                }
+                Err(e) => {
+                    warn!(target: "proof_service::run", "Failed to advance Redis state for finalized header slot {}. Error: {}", light_client.store.finalized_header.beacon().slot, e)
+                }
+            }
+        }
+
+        // Periodically check for and pick up orphaned proof generation tasks
+        if let Err(e) = proof_service.restart_orphaned_proofs().await {
+            warn!(target: "proof_service::run", "Error during orphaned proof pickup check: {}", e);
+        }
+
+        let _ = interval.tick().await;
+
+        let prev_finalized_slot = light_client.store.finalized_header.beacon().slot;
+        // todo: multiplex this via a new Inner replacement client
+        let res = light_client.advance().await;
+        if let Err(err) = res {
+            warn!(target: "proof_service::run", "Helios light client advance error: {}", err);
+            continue;
+        }
+        let new_finalized_slot = light_client.store.finalized_header.beacon().slot;
+        if new_finalized_slot > prev_finalized_slot {
+            info!(
+                target: "proof_service::run",
+                "Helios light client advanced. Finalized slot: {} -> {}",
+                prev_finalized_slot, new_finalized_slot
+            );
+            should_advance_db_state = true;
+        }
     }
 }
 
