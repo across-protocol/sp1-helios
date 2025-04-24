@@ -7,7 +7,7 @@ use std::{
 
 use anyhow::anyhow;
 
-use alloy::{hex, rpc::types::Transaction};
+use alloy::hex;
 use alloy_primitives::B256;
 use anyhow::Result;
 use chrono::Duration;
@@ -24,8 +24,6 @@ use helios_consensus_core::{
 use helios_ethereum::{config::Config, rpc::ConsensusRpc};
 use log::{info, warn};
 use tokio::time::timeout;
-
-use crate::rpc_proxies::multiplex;
 
 pub const MAX_REQUEST_LIGHT_CLIENT_UPDATES: u8 = 128;
 
@@ -102,22 +100,13 @@ impl<S: ConsensusSpec, R: ConsensusRpc<S>> Client<S, R> {
         self.last_checkpoint = None;
 
         self.bootstrap(checkpoint).await?;
+        self.sync_to_chain().await?;
 
-        // let updates: Vec<Update<S>> = self.get_updates().await?;
-
-        // for update in updates {
-        //     self.verify_update(&update)?;
-        //     self.apply_update(&update);
-        // }
-        // let finality_update = self.rpc.get_finality_update().await?;
-        // self.verify_finality_update(&finality_update)?;
-        // self.apply_finality_update(&finality_update);
-
-        // info!(
-        //     target: "helios::consensus",
-        //     "consensus client in sync with checkpoint: 0x{}",
-        //     hex::encode(checkpoint)
-        // );
+        info!(
+            target: "helios::consensus",
+            "consensus client in sync with checkpoint: 0x{}",
+            hex::encode(checkpoint)
+        );
 
         Ok(())
     }
@@ -174,30 +163,108 @@ impl<S: ConsensusSpec, R: ConsensusRpc<S>> Client<S, R> {
         }
     }
 
-    async fn sync_after_bootstrap(&self) -> Result<()> {
-        todo!()
+    async fn sync_to_chain(&mut self) -> Result<()> {
+        let futs = self.rpcs.iter().map(|rpc| {
+            let store = self.store.clone();
+            let config = self.config.clone();
+            async move {
+                match timeout(std::time::Duration::from_secs(12), async move {
+                    Self::sync_to_chain_single_rpc(store, config, rpc).await
+                })
+                .await
+                {
+                    Ok(Ok(res)) => Ok(res),
+                    Ok(Err(err)) => Err(anyhow!("rpc error {err}")),
+                    Err(elapsed) => Err(anyhow!("rpc timed out after {elapsed}")),
+                }
+            }
+        });
+
+        /*
+        ?todo
+        Currently, we're waiting for each rpc to try and complete this sync before looking at results.
+        We do this to see what latest finalized block we can get from each of the rpc, and take the latest one.
+        Might want to change this later somehow
+        */
+        let results = join_all(futs).await;
+        let mut candidate: Option<(LightClientStore<S>, Option<B256>)> = None;
+        for result in results {
+            match result {
+                Ok((store, last_checkpoint)) => {
+                    // todo: here, we're only checking for finalized head progression. Should we be checking for something else too, like next_sync_commmittee being set?
+                    if candidate.is_none()
+                        || candidate.as_ref().unwrap().0.finalized_header.beacon().slot
+                            < store.finalized_header.beacon().slot
+                    {
+                        candidate = Some((store, last_checkpoint))
+                    }
+                }
+                Err(_) => todo!(),
+            }
+        }
+
+        if candidate.is_some() {
+            let (store, last_checkpoint) = candidate.unwrap();
+            self.store = store;
+            if last_checkpoint.is_some() {
+                self.last_checkpoint = last_checkpoint;
+            }
+            Ok(())
+        } else {
+            Err(anyhow!("all rpcs failed"))
+        }
     }
 
-    async fn sync_after_bootstrap_single_rpc(&self, rpc: &R) -> Result<LightClientStore<S>> {
-        let expected_current_slot = self.config.expected_current_slot();
-        let current_finalized_slot = self.store.finalized_header.beacon().slot;
+    async fn sync_to_chain_single_rpc(
+        mut store: LightClientStore<S>,
+        config: Arc<Config>,
+        rpc: &R,
+    ) -> Result<(LightClientStore<S>, Option<B256>)> {
+        let mut last_checkpoint: Option<B256> = None;
+        let expected_current_slot = config.expected_current_slot();
+        let current_finalized_slot = store.finalized_header.beacon().slot;
         let updates =
-            Self::get_updates_single_rpc(expected_current_slot, current_finalized_slot, rpc).await;
+            Self::get_updates_single_rpc(expected_current_slot, current_finalized_slot, rpc)
+                .await?;
 
-        Err(anyhow!(""))
+        for update in &updates {
+            helios_consensus_core::verify_update::<S>(
+                update,
+                config.expected_current_slot(),
+                &store,
+                config.chain.genesis_root,
+                &config.forks,
+            )
+            .map_err(|e| anyhow!("{e}"))?;
+            let new_checkpoint = helios_consensus_core::apply_update::<S>(&mut store, update);
+            if new_checkpoint.is_some() {
+                last_checkpoint = new_checkpoint;
+            }
+        }
+
+        let finality_update = rpc
+            .get_finality_update()
+            .await
+            .map_err(|e| anyhow!("{e}"))?;
+
+        helios_consensus_core::verify_finality_update::<S>(
+            &finality_update,
+            config.expected_current_slot(),
+            &store,
+            config.chain.genesis_root,
+            &config.forks,
+        )
+        .map_err(|e| anyhow!("{e}"))?;
+
+        let new_checkpoint =
+            helios_consensus_core::apply_finality_update::<S>(&mut store, &finality_update);
+        if new_checkpoint.is_some() {
+            last_checkpoint = new_checkpoint;
+        }
+
+        // If we're at this point, all verifications succeeded so we just return resulting store and checkpoint
+        Ok((store, last_checkpoint))
     }
-
-    // pub async fn get_updates(&self) -> Result<Vec<Update<S>>> {
-    //     let expected_current_slot = self.expected_current_slot();
-    //     let current_finalized_slot = self.store.finalized_header.beacon().slot;
-    //     let futs = self.rpcs.iter().map(|rpc| async {
-    //         let updates =
-    //             Self::get_updates_single_rpc(expected_current_slot, current_finalized_slot, rpc)
-    //                 .await;
-    //     });
-
-    //     Err(anyhow!(""))
-    // }
 
     async fn get_updates_single_rpc(
         expected_current_slot: u64,
@@ -238,6 +305,7 @@ trait ConfigExt {
     fn is_valid_checkpoint(&self, blockhash_slot: u64) -> bool;
     fn expected_current_slot(&self) -> u64;
     fn slot_timestamp(&self, slot: u64) -> u64;
+    #[allow(dead_code)]
     fn age(&self, slot: u64) -> Duration;
 }
 
