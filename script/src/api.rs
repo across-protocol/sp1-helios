@@ -49,30 +49,30 @@ impl From<ProofRequestStatus> for ProofStatusResponse {
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct ApiProofRequest {
     /// Contract address to prove a storage slot for (hex string with 0x prefix)
-    pub contract_address: String,
+    pub src_chain_contract_address: String,
     /// Storage slot key to prove (hex string with 0x prefix)
-    pub storage_slot: String,
-    /// Block number on the source chain to prove against
-    pub block_number: u64,
-    /// The caller must pass a valid head stored on associated destination chain contract
-    pub valid_contract_head: u64,
-    /// The caller must pass a valid header stored on associated destination chain contract
-    pub valid_contract_header: String,
+    pub src_chain_storage_slot: String,
+    /// Minumum block number required for the storage to Be present (e.g. the block number of TX that set the storage slot above)
+    pub src_chain_block_number: u64,
+    /// A stored head on destination chain Helios contract
+    pub dst_chain_contract_from_head: u64,
+    /// A corresponding stored header on destination chain Helios contract
+    pub dst_chain_contract_from_header: String,
 }
 
+// Internal represenation of `ApiProofRequest`
 #[derive(Debug, Clone, Serialize, Deserialize, RlpEncodable, RlpDecodable)]
 pub struct ProofRequest {
     /// Contract address to prove a storage slot for
-    pub hub_pool_address: Address,
+    pub src_chain_contract_address: Address,
     /// Storage slot key to prove
-    pub storage_slot: B256,
-    /// Block number on the source chain to prove against
-    pub block_number: u64,
-    /// The caller must pass a valid head stored on associated destination chain contract.
-    /// A rule of thumb is to have this be earlier than block_number.
-    pub stored_contract_head: u64,
-    /// This checkpoint(header) is required to check the integrity of data we're downloading before generating a proof
-    pub head_checkpoint: B256,
+    pub src_chain_storage_slot: B256,
+    /// Minumum block number required for the storage to Be present (e.g. the block number of TX that set the storage slot above)
+    pub src_chain_block_number: u64,
+    /// A stored head on destination chain Helios contract
+    pub dst_chain_contract_from_head: u64,
+    /// A corresponding stored header on destination chain Helios contract
+    pub dst_chain_contract_from_header: B256,
 }
 
 impl TryFrom<ApiProofRequest> for ProofRequest {
@@ -80,17 +80,19 @@ impl TryFrom<ApiProofRequest> for ProofRequest {
 
     fn try_from(req: ApiProofRequest) -> Result<Self, Self::Error> {
         Ok(ProofRequest {
-            hub_pool_address: Address::from_str(&req.contract_address).map_err(|_| {
-                ProofServiceError::Internal("Invalid contract address format".to_string())
-            })?,
-            storage_slot: B256::from_str(&req.storage_slot).map_err(|_| {
+            src_chain_contract_address: Address::from_str(&req.src_chain_contract_address)
+                .map_err(|_| {
+                    ProofServiceError::Internal("Invalid contract address format".to_string())
+                })?,
+            src_chain_storage_slot: B256::from_str(&req.src_chain_storage_slot).map_err(|_| {
                 ProofServiceError::Internal("Invalid storage slot format".to_string())
             })?,
-            block_number: req.block_number,
-            stored_contract_head: req.valid_contract_head,
-            head_checkpoint: B256::from_str(&req.valid_contract_header).map_err(|_| {
-                ProofServiceError::Internal("Invalid storage slot format".to_string())
-            })?,
+            src_chain_block_number: req.src_chain_block_number,
+            dst_chain_contract_from_head: req.dst_chain_contract_from_head,
+            dst_chain_contract_from_header: B256::from_str(&req.dst_chain_contract_from_header)
+                .map_err(|_| {
+                    ProofServiceError::Internal("Invalid storage slot format".to_string())
+                })?,
         })
     }
 }

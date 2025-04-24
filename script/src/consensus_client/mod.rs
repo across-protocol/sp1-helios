@@ -61,7 +61,9 @@ pub async fn get_proof_inputs<S: ConsensusSpec>(
     debug!(target: "consensus_client::proof_inputs", "start");
 
     let mut client = Client::<S, helios_ethereum::rpc::http_rpc::HttpRpc>::from_env()?;
-    client.bootstrap(request.head_checkpoint).await?;
+    client
+        .bootstrap(request.dst_chain_contract_from_header)
+        .await?;
 
     let initial_store = client.store.clone();
 
