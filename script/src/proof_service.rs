@@ -3,27 +3,16 @@ use crate::{
     consensus_client::{self, ConfigExt},
     proof_backends::ProofBackend,
     redis_store::RedisStore,
-    rpc_proxies::{
-        consensus::ConsensusRpcProxy,
-        execution::{self},
-    },
-    try_get_client, try_get_updates,
+    rpc_proxies::execution::{self},
     types::{ProofId, ProofRequestState, ProofRequestStatus, ProofServiceError},
     util::CancellationTokenGuard,
 };
-use alloy::{hex, transports::BoxFuture};
+use alloy::transports::BoxFuture;
 use alloy_primitives::B256;
-use alloy_trie::proof;
 use anyhow::{anyhow, Context, Result};
 use async_trait::async_trait;
-use helios_consensus_core::{
-    consensus_spec::{ConsensusSpec, MainnetConsensusSpec},
-    types::{FinalityUpdate, LightClientHeader, Update},
-};
-use helios_ethereum::{
-    consensus::Inner,
-    rpc::{http_rpc::HttpRpc, ConsensusRpc},
-};
+use helios_consensus_core::{consensus_spec::MainnetConsensusSpec, types::LightClientHeader};
+use helios_ethereum::rpc::http_rpc::HttpRpc;
 use sp1_helios_primitives::types::{ContractStorage, ProofInputs, StorageSlot};
 use tree_hash::TreeHash;
 
@@ -391,42 +380,14 @@ where
         Ok(service)
     }
 
-    async fn get_consensus_part_of_inputs<S: ConsensusSpec, R: ConsensusRpc<S>>(
-        &self,
-        request: &ProofRequest,
-    ) -> anyhow::Result<(Inner<S, R>, Vec<Update<S>>, FinalityUpdate<S>)> {
-        let client = try_get_client::<S, R>(request.head_checkpoint)
-            .await
-            .context("Failed to get light client from checkpoint")
-            .map_err(|e| anyhow!(e.to_string()))?;
-
-        let sync_committee_updates = try_get_updates::<S, R>(&client)
-            .await
-            .context("Failed to get sync committee updates")
-            .map_err(|e| anyhow!(e.to_string()))?;
-
-        let finality_update: FinalityUpdate<S> =
-            client.rpc.get_finality_update().await.map_err(|e| {
-                anyhow!(format!(
-                    "Failed to get finality update from consensus RPC: {}",
-                    e
-                ))
-            })?;
-
-        Ok((client, sync_committee_updates, finality_update))
-    }
-
     /// Fetches the necessary inputs for proof generation based on the request.
     /// This involves interacting with consensus and execution layer RPC proxies.
     async fn get_proof_inputs(&self, request: &ProofRequest) -> anyhow::Result<ProofInputs> {
-        let (client, sync_committee_updates, finality_update) = self
-            // todo: this should NOT return Inner. It should just return required parts from consensus RPC calls. No wrapper types like Inner
-            // expected output: (store, expected_current_slot, genesis_root, forks, sync_committee_updates, finality_update, ?execution_block_id)
-            .get_consensus_part_of_inputs::<MainnetConsensusSpec, ConsensusRpcProxy>(request)
-            .await?;
+        let consensus_proof_inputs =
+            consensus_client::get_proof_inputs::<MainnetConsensusSpec>(request).await?;
 
-        let latest_finalized_header = finality_update.finalized_header();
-        let expected_current_slot = client.expected_current_slot();
+        let latest_finalized_header = consensus_proof_inputs.finality_update.finalized_header();
+        let expected_current_slot = consensus_proof_inputs.expected_current_slot;
 
         // Fetch execution layer storage proof
         let latest_finalized_execution_header = latest_finalized_header
@@ -467,12 +428,12 @@ where
         };
 
         let inputs = ProofInputs {
-            sync_committee_updates,
-            finality_update,
+            sync_committee_updates: consensus_proof_inputs.sync_committee_updates,
+            finality_update: consensus_proof_inputs.finality_update,
             expected_current_slot,
-            store: client.store.clone(),
-            genesis_root: client.config.chain.genesis_root,
-            forks: client.config.forks.clone(),
+            store: consensus_proof_inputs.initial_store,
+            genesis_root: consensus_proof_inputs.config.chain.genesis_root,
+            forks: consensus_proof_inputs.config.forks.clone(),
             contract_storage_slots: ContractStorage {
                 address: proof.address,
                 expected_value: alloy_trie::TrieAccount {

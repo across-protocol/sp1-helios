@@ -8,7 +8,10 @@ use std::{
 
 use anyhow::anyhow;
 
-use alloy::hex::{self};
+use alloy::{
+    eips::BlockId,
+    hex::{self},
+};
 use alloy_primitives::B256;
 use anyhow::Result;
 use chrono::Duration;
@@ -26,6 +29,8 @@ use helios_ethereum::{config::Config, rpc::ConsensusRpc};
 use log::{debug, info, warn};
 use tokio::time::timeout;
 
+use crate::api::ProofRequest;
+
 pub const MAX_REQUEST_LIGHT_CLIENT_UPDATES: u8 = 128;
 const CONENSUS_RPCS_ENV_VAR: &str = "CONSENSUS_RPCS_LIST";
 
@@ -37,6 +42,91 @@ pub struct Client<S: ConsensusSpec, R: ConsensusRpc<S>> {
     // todo? Honestly, this last_checkpoint is not used for much. We could be logging it for easier debug, but ...
     last_checkpoint: Option<B256>,
     // todo? smth like `finalized_block_send: Sender<Block<Transaction>>,`
+}
+
+pub struct ConsensusProofInputs<S: ConsensusSpec> {
+    pub initial_store: LightClientStore<S>,
+    pub expected_current_slot: u64,
+    pub genesis_root: B256,
+    pub forks: helios_consensus_core::types::Forks,
+    pub sync_committee_updates: Vec<Update<S>>,
+    pub finality_update: FinalityUpdate<S>,
+    pub execution_block_id: BlockId,
+    pub config: Arc<Config>,
+}
+
+pub async fn get_proof_inputs<S: ConsensusSpec>(
+    request: &ProofRequest,
+) -> Result<ConsensusProofInputs<S>> {
+    debug!(target: "consensus_client::proof_inputs", "start");
+
+    let mut client = Client::<S, helios_ethereum::rpc::http_rpc::HttpRpc>::from_env()?;
+    client.bootstrap(request.head_checkpoint).await?;
+
+    let initial_store = client.store.clone();
+
+    let trace = client.sync_to_chain().await?;
+
+    let execution_block_number = *client
+        .store
+        .finalized_header
+        .execution()
+        .map_err(|_| {
+            anyhow!(
+            "current epoch does not belong to a hard fork that enables header execution payload"
+        )
+        })?
+        .block_number();
+
+    debug!(target: "consensus_client::proof_inputs", "successfully generated proof inputs. Finalized slot {}", trace.final_store.finalized_header.beacon().slot);
+
+    Ok(ConsensusProofInputs {
+        initial_store,
+        expected_current_slot: trace.expected_current_slot,
+        genesis_root: client.config.chain.genesis_root,
+        forks: client.config.forks.clone(),
+        sync_committee_updates: trace.sync_committee_updates,
+        finality_update: trace.finality_update,
+        execution_block_id: BlockId::Number(alloy::eips::BlockNumberOrTag::Number(
+            execution_block_number,
+        )),
+        config: client.config.clone(),
+    })
+}
+
+// todo: If we decide to implement `get_proof_inputs` for Inner as well, this is a good starting point
+// async fn get_consensus_part_of_inputs<S: ConsensusSpec, R: ConsensusRpc<S>>(
+//     &self,
+//     request: &ProofRequest,
+// ) -> anyhow::Result<(Inner<S, R>, Vec<Update<S>>, FinalityUpdate<S>)> {
+//     let client = try_get_client::<S, R>(request.head_checkpoint)
+//         .await
+//         .context("Failed to get light client from checkpoint")
+//         .map_err(|e| anyhow!(e.to_string()))?;
+
+//     let sync_committee_updates = try_get_updates::<S, R>(&client)
+//         .await
+//         .context("Failed to get sync committee updates")
+//         .map_err(|e| anyhow!(e.to_string()))?;
+
+//     let finality_update: FinalityUpdate<S> =
+//         client.rpc.get_finality_update().await.map_err(|e| {
+//             anyhow!(format!(
+//                 "Failed to get finality update from consensus RPC: {}",
+//                 e
+//             ))
+//         })?;
+
+//     Ok((client, sync_committee_updates, finality_update))
+// }
+
+// todo? Consider adding metadata, like rpc name or execution time etc.
+struct SyncToChainTrace<S: ConsensusSpec> {
+    sync_committee_updates: Vec<Update<S>>,
+    finality_update: FinalityUpdate<S>,
+    final_store: LightClientStore<S>,
+    last_checkpoint: Option<B256>,
+    expected_current_slot: u64,
 }
 
 impl<S: ConsensusSpec, R: ConsensusRpc<S> + std::fmt::Debug> Client<S, R> {
@@ -232,7 +322,6 @@ impl<S: ConsensusSpec, R: ConsensusRpc<S> + std::fmt::Debug> Client<S, R> {
         config: Arc<Config>,
         rpc: &R,
     ) -> Result<(LightClientStore<S>, Option<B256>)> {
-        // todo: why is last_checkpoint not used?
         let mut last_checkpoint: Option<B256> = None;
         let finality_update = rpc
             .get_finality_update()
@@ -278,7 +367,7 @@ impl<S: ConsensusSpec, R: ConsensusRpc<S> + std::fmt::Debug> Client<S, R> {
         Ok((store, last_checkpoint))
     }
 
-    async fn sync_to_chain(&mut self) -> Result<()> {
+    async fn sync_to_chain(&mut self) -> Result<SyncToChainTrace<S>> {
         let futs = self.rpcs.iter().map(|rpc| {
             let store = self.store.clone();
             let config = self.config.clone();
@@ -302,18 +391,20 @@ impl<S: ConsensusSpec, R: ConsensusRpc<S> + std::fmt::Debug> Client<S, R> {
         Might want to change this later somehow
         */
         let results = join_all(futs).await;
-        let mut candidate: Option<(LightClientStore<S>, Option<B256>)> = None;
+        let mut candidate: Option<SyncToChainTrace<S>> = None;
         for result in results {
             match result {
-                Ok((result_store, result_checkpoint)) => {
-                    if let Some((ref candidate_store, _)) = candidate {
-                        if compare_store_advancement(&result_store, candidate_store)
-                            == Ordering::Greater
+                Ok(trace) => {
+                    if let Some(ref curr_candidate_trace) = candidate {
+                        if compare_store_advancement(
+                            &trace.final_store,
+                            &curr_candidate_trace.final_store,
+                        ) == Ordering::Greater
                         {
-                            candidate = Some((result_store, result_checkpoint));
+                            candidate = Some(trace);
                         }
                     } else {
-                        candidate = Some((result_store, result_checkpoint));
+                        candidate = Some(trace);
                     }
                 }
                 Err(e) => {
@@ -326,10 +417,10 @@ impl<S: ConsensusSpec, R: ConsensusRpc<S> + std::fmt::Debug> Client<S, R> {
         }
 
         if candidate.is_some() {
-            let (store, last_checkpoint) = candidate.unwrap();
-            self.apply_store_update(store, last_checkpoint);
+            let trace = candidate.unwrap();
+            self.apply_store_update(trace.final_store.clone(), trace.last_checkpoint);
 
-            Ok(())
+            Ok(trace)
         } else {
             Err(anyhow!("all rpcs failed"))
         }
@@ -339,7 +430,7 @@ impl<S: ConsensusSpec, R: ConsensusRpc<S> + std::fmt::Debug> Client<S, R> {
         mut store: LightClientStore<S>,
         config: Arc<Config>,
         rpc: &R,
-    ) -> Result<(LightClientStore<S>, Option<B256>)> {
+    ) -> Result<SyncToChainTrace<S>> {
         let mut last_checkpoint: Option<B256> = None;
         let expected_current_slot = config.expected_current_slot();
         let current_finalized_slot = store.finalized_header.beacon().slot;
@@ -375,8 +466,14 @@ impl<S: ConsensusSpec, R: ConsensusRpc<S> + std::fmt::Debug> Client<S, R> {
 
         Self::apply_finality_update(&mut last_checkpoint, &mut store, &finality_update);
 
-        // If we're at this point, all verifications succeeded so we just return resulting store and checkpoint
-        Ok((store, last_checkpoint))
+        // If we're at this point, all verifications succeeded so we return the final trace
+        Ok(SyncToChainTrace {
+            sync_committee_updates: updates,
+            finality_update,
+            final_store: store,
+            last_checkpoint,
+            expected_current_slot,
+        })
     }
 
     async fn get_updates_single_rpc(
