@@ -454,12 +454,13 @@ fn compare_store_advancement<S: ConsensusSpec>(
     }
 }
 
-trait ConfigExt {
+pub trait ConfigExt {
     fn is_valid_checkpoint(&self, blockhash_slot: u64) -> bool;
     fn expected_current_slot(&self) -> u64;
     fn slot_timestamp(&self, slot: u64) -> u64;
     #[allow(dead_code)]
     fn age(&self, slot: u64) -> Duration;
+    fn duration_until_next_update(&self) -> Duration;
 }
 
 impl<T: std::ops::Deref<Target = Config>> ConfigExt for T {
@@ -492,5 +493,21 @@ impl<T: std::ops::Deref<Target = Config>> ConfigExt for T {
 
         let delay = now - std::time::Duration::from_secs(expected_time);
         chrono::Duration::from_std(delay).unwrap()
+    }
+
+    fn duration_until_next_update(&self) -> Duration {
+        let current_slot = self.expected_current_slot();
+        let next_slot = current_slot + 1;
+        let next_slot_timestamp = self.slot_timestamp(next_slot);
+
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_else(|_| panic!("unreachable"))
+            .as_secs();
+
+        let time_to_next_slot = next_slot_timestamp - now;
+        let next_update = time_to_next_slot + 4;
+
+        Duration::try_seconds(next_update as i64).unwrap()
     }
 }

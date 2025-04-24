@@ -1,5 +1,6 @@
 use crate::{
     api::ProofRequest,
+    consensus_client::{self, ConfigExt},
     proof_backends::ProofBackend,
     redis_store::RedisStore,
     rpc_proxies::{
@@ -18,7 +19,10 @@ use helios_consensus_core::{
     consensus_spec::{ConsensusSpec, MainnetConsensusSpec},
     types::{FinalityUpdate, LightClientHeader, Update},
 };
-use helios_ethereum::{consensus::Inner, rpc::ConsensusRpc};
+use helios_ethereum::{
+    consensus::Inner,
+    rpc::{http_rpc::HttpRpc, ConsensusRpc},
+};
 use sp1_helios_primitives::types::{ContractStorage, ProofInputs, StorageSlot};
 use tree_hash::TreeHash;
 
@@ -730,17 +734,20 @@ where
     We can also support additional functions, like: `.get_proof_inputs`
      */
 
-    // todo: here, instead of just bootstrapping client from checkpoint, we might want to call .sync
-    let mut light_client =
-        try_get_client::<MainnetConsensusSpec, ConsensusRpcProxy>(checkpoint).await?;
+    let mut light_client = consensus_client::Client::<MainnetConsensusSpec, HttpRpc>::from_env()?;
+    light_client.sync(checkpoint).await?;
     info!(
         target: "proof_service::run",
         "Initialized light client. Finalized slot: {}",
         light_client.store.finalized_header.beacon().slot
     );
 
-    let next_slot_time =
-        Instant::now() + light_client.duration_until_next_update().to_std().unwrap();
+    let next_slot_time = Instant::now()
+        + light_client
+            .config
+            .duration_until_next_update()
+            .to_std()
+            .unwrap();
     let mut interval = interval_at(next_slot_time, std::time::Duration::from_secs(12));
 
     info!(
