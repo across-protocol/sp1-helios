@@ -4,7 +4,6 @@ use reqwest::Client;
 use serde::Serialize;
 use tokio::task;
 use tracing::field::Field;
-// use tracing::tracing_core::field::Field;
 use tracing::{field::Visit, Event, Level, Subscriber};
 use tracing_subscriber::layer::{Context, Layer};
 use tracing_subscriber::registry::LookupSpan;
@@ -38,21 +37,17 @@ struct MessageExtractor<'a> {
 }
 
 impl<'a> Visit for MessageExtractor<'a> {
-    // Only care about string and debug representations for the message
     fn record_str(&mut self, field: &Field, value: &str) {
         if field.name() == "message" && self.message_buf.is_empty() {
-            // Take the first "message" field
             self.message_buf.push_str(value);
         }
     }
     fn record_debug(&mut self, field: &Field, value: &dyn std::fmt::Debug) {
         if field.name() == "message" && self.message_buf.is_empty() {
-            // Take the first "message" field
             use std::fmt::Write;
             let _ = write!(self.message_buf, "{:?}", value);
         }
     }
-    // Ignore bool, i64, u64, etc.
 }
 
 impl<S> Layer<S> for SlackLayer
@@ -60,51 +55,51 @@ where
     S: Subscriber + for<'a> LookupSpan<'a>,
 {
     fn on_event(&self, event: &Event, _ctx: Context<S>) {
-        // Context not needed here
         // 1) Level filter: Reject events LESS severe than the threshold
         if *event.metadata().level() > self.threshold {
-            // Example: If threshold is WARN, and event is INFO, INFO > WARN is true, so reject.
-            // Example: If threshold is WARN, and event is WARN, WARN > WARN is false, so keep.
-            // Example: If threshold is WARN, and event is ERROR, ERROR > WARN is false, so keep.
             return;
         }
 
-        // If we reach here, the event level is <= self.threshold (equally or more severe)
-
-        // 2) Extract the message field
         let mut message = String::new();
         let mut visitor = MessageExtractor {
             message_buf: &mut message,
         };
         event.record(&mut visitor);
 
-        // 3) Timestamp and manually format the output string
         let ts = Local::now().format("%Y-%m-%dT%H:%M:%S%.3f");
         let level = event.metadata().level();
         let target = event.metadata().target();
 
-        let final_text = if message.is_empty() {
-            // Fallback if no message field found
-            format!(
-                "{} [{:<5}] [{}] Event occurred (no message field)",
-                ts, level, target
-            )
-        } else {
-            // Format with the extracted message
-            format!("{} [{:<5}] [{}] {}", ts, level, target, message)
+        let level_emoji = match *level {
+            Level::ERROR => "🚨",
+            Level::WARN => "⚠️",
+            Level::INFO => "ℹ️",
+            Level::DEBUG => "🐛",
+            Level::TRACE => "👣",
         };
 
-        // 4) Fire-and-forget async post (with fixed error handling)
+        let final_text = if message.is_empty() {
+            format!(
+                "`{} [{:<5}]` {} `[{}]` Event occurred (no message field)",
+                ts, level, level_emoji, target
+            )
+        } else {
+            format!(
+                "`{} [{:<5}]` {} `[{}]` {}",
+                ts, level, level_emoji, target, message
+            )
+        };
+
+        // 4) Fire-and-forget async post
         let client = self.client.clone();
         let url = self.webhook.clone();
-        let text = final_text; // Use the manually formatted string
+        let text = final_text;
         task::spawn(async move {
             match client.post(&url).json(&SlackPayload { text }).send().await {
                 Ok(response) => {
-                    let status = response.status(); // Get status before consuming body
+                    let status = response.status();
                     if !status.is_success() {
                         if let Ok(body) = response.text().await {
-                            // Consume body only on error
                             eprintln!(
                                 "SlackLayer Error: Failed sending to Slack (Status {}): {}",
                                 status, body
