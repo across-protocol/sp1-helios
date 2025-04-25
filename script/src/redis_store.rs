@@ -1,10 +1,13 @@
 use crate::types::{ProofId, ProofRequestState, ProofRequestStatus, ProofServiceError};
 use anyhow::{anyhow, Context};
 use helios_consensus_core::types::LightClientHeader;
-use tracing::{debug, info, warn};
-use redis::{aio::ConnectionManager, AsyncCommands, Client};
+use redis::{
+    aio::{ConnectionManager, ConnectionManagerConfig},
+    AsyncCommands, Client,
+};
 use serde::{de::DeserializeOwned, Serialize};
 use std::{env, marker::PhantomData, time::Duration};
+use tracing::{debug, info, warn};
 
 pub struct RedisStore<ProofOutput>
 where
@@ -35,10 +38,14 @@ where
         info!(" - Global Lock Duration: {}s", lock_duration_secs);
         info!(" - Key Prefix: {}", key_prefix);
 
+        let config = ConnectionManagerConfig::new()
+            .set_connection_timeout(Duration::from_secs(2))
+            .set_response_timeout(Duration::from_secs(1));
+
         let client = Client::open(redis_url.as_str()).context("Failed to create Redis client")?;
         let conn_manager = match tokio::time::timeout(
             Duration::from_secs(5),
-            ConnectionManager::new(client),
+            ConnectionManager::new_with_config(client, config),
         )
         .await
         {

@@ -11,18 +11,25 @@ use alloy::transports::BoxFuture;
 use alloy_primitives::B256;
 use anyhow::{anyhow, Context, Result};
 use async_trait::async_trait;
-use helios_consensus_core::{consensus_spec::MainnetConsensusSpec, types::LightClientHeader};
-use helios_ethereum::rpc::http_rpc::HttpRpc;
+use helios_consensus_core::{
+    consensus_spec::{ConsensusSpec, MainnetConsensusSpec},
+    types::LightClientHeader,
+};
+use helios_ethereum::rpc::{http_rpc::HttpRpc, ConsensusRpc};
+use serde::{de::DeserializeOwned, Serialize};
 use sp1_helios_primitives::types::{ContractStorage, ProofInputs, StorageSlot};
 use tree_hash::TreeHash;
 
-use std::env;
 use std::str::FromStr;
 use std::time::Duration;
+use std::{env, sync::Arc};
 use tokio::time::{interval_at, Instant};
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, info, warn};
 
+const FINALIZED_HEADER_AGE_BUFFER_SECS: u64 = 180; // 3 minutes
+const MAX_FINALIZED_HEADER_AGE: std::time::Duration =
+    Duration::from_secs(12 * 32 * 3 + FINALIZED_HEADER_AGE_BUFFER_SECS); // max legit finalized header age: 3 epochs + buffer to allow for an update to happen
 const INITIAL_PROOF_GENERATION_LOCK_DURATION_MS: u64 = 1000;
 
 /// Service responsible for managing the lifecycle of ZK proof generation requests.
@@ -669,26 +676,54 @@ where
     }
 }
 
-/*
-!todo:
-If we want to support different versions of LightClient: e.g. Inner vs custom ConsensusClient impl,
-we should use LC: LightClient as a generic type for run function. Then Inner with a simple HttpRpc
-can be used as a safe feature-complete alternative to a more dangerous ConsensusClient impl that is
-not battle-tested, but has good multiplexing capabilities
- */
-
-#[allow(dead_code)]
-#[async_trait]
-trait LightClient {
-    async fn advance(&self);
-    async fn sync(&self);
-    // etc.
-}
-
-/// Run the proof service, periodically checking for new finalized headers
+/// Run stays in sync with the chain and periodically posts necessary updates to the proof_service
 pub async fn run<B>(mut proof_service: ProofService<B>) -> anyhow::Result<()>
 where
     B: ProofBackend + Clone + Send + Sync,
+{
+    let (mut light_client, next_slot_time) =
+        init_light_client::<B, MainnetConsensusSpec, HttpRpc>(&mut proof_service).await?;
+
+    let mut interval = interval_at(next_slot_time, std::time::Duration::from_secs(12));
+    info!(
+        target: "proof_service::run",
+        "Starting main loop. Header polling interval: 12s"
+    );
+
+    let mut should_advance_redis_state = true;
+    loop {
+        if should_advance_redis_state {
+            // Try to update redis with new finalized header
+            update_redis_state(
+                &mut proof_service,
+                light_client.store.finalized_header.clone(),
+                &mut should_advance_redis_state,
+            )
+            .await;
+        }
+
+        // Periodically check for and pick up orphaned proof generation tasks
+        if let Err(e) = proof_service.restart_orphaned_proofs().await {
+            warn!(target: "proof_service::run", "Error during orphaned proof pickup check: {}", e);
+        }
+
+        // Periodically check that the finalized header stored in redis is no older than allowed MAX_FINALIZED_HEADER_AGE
+        check_header_health(&mut proof_service.redis_store, light_client.config.clone()).await?;
+
+        let _ = interval.tick().await;
+
+        // Try to update light client to be in sync with chain tip
+        advance_light_client(&mut light_client, &mut should_advance_redis_state).await;
+    }
+}
+
+async fn init_light_client<B, S, R>(
+    proof_service: &mut ProofService<B>,
+) -> anyhow::Result<(consensus_client::Client<S, R>, Instant)>
+where
+    B: ProofBackend + Clone + Send + Sync + 'static,
+    S: ConsensusSpec,
+    R: ConsensusRpc<S> + std::fmt::Debug,
 {
     let init_checkpoint = proof_service.get_initial_checkpoint().await?;
 
@@ -699,7 +734,7 @@ where
     );
 
     // Create light_client. It is our main driver for finality updates / data integrity checks. This function aims to be updating state of this guy
-    let mut light_client = consensus_client::Client::<MainnetConsensusSpec, HttpRpc>::from_env()?;
+    let mut light_client = consensus_client::Client::<S, R>::from_env()?;
     light_client.sync(init_checkpoint).await?;
     info!(
         target: "proof_service::run",
@@ -713,57 +748,116 @@ where
             .duration_until_next_update()
             .to_std()
             .unwrap();
-    let mut interval = interval_at(next_slot_time, std::time::Duration::from_secs(12));
 
-    info!(
-        target: "proof_service::run",
-        "Starting main loop. Header polling interval: 12s"
-    );
+    Ok((light_client, next_slot_time))
+}
 
-    let mut should_advance_redis_state = true;
-    loop {
-        if should_advance_redis_state {
-            let res = proof_service
-                .process_new_finalized_header(light_client.store.finalized_header.clone())
-                .await;
+/// Best effort attempt to advance redis state. Logs on errors
+async fn update_redis_state<B>(
+    proof_service: &mut ProofService<B>,
+    finalized_header: LightClientHeader,
+    should_advance_redis_state: &mut bool,
+) where
+    B: ProofBackend + Clone + Send + Sync + 'static,
+{
+    let res = proof_service
+        .process_new_finalized_header(finalized_header.clone())
+        .await;
 
-            match res {
-                Ok(header_equal_or_newer) => {
-                    if header_equal_or_newer {
-                        info!(target: "proof_service::run", "Redis state set to equal or newer than slot {}", light_client.store.finalized_header.beacon().slot);
-                        should_advance_redis_state = false;
+    match res {
+        Ok(header_equal_or_newer) => {
+            if header_equal_or_newer {
+                info!(target: "proof_service::run", "Redis state set to equal or newer than slot {}", finalized_header.beacon().slot);
+                *should_advance_redis_state = false;
+            } else {
+                debug!(target: "proof_service::run", "Redis state advancement called but no update occurred for slot {}", finalized_header.beacon().slot);
+            }
+        }
+        Err(e) => {
+            warn!(target: "proof_service::run", "Failed to advance Redis state for finalized header slot {}. Error: {}", finalized_header.beacon().slot, e);
+        }
+    }
+}
+
+/// Best effort attempt to advance Light Client. Logs on errors
+async fn advance_light_client<S: ConsensusSpec, R: ConsensusRpc<S> + std::fmt::Debug>(
+    light_client: &mut consensus_client::Client<S, R>,
+    should_advance_redis_state: &mut bool,
+) {
+    let prev_finalized_slot = light_client.store.finalized_header.beacon().slot;
+    let res = light_client.advance().await;
+    if let Err(err) = res {
+        warn!(target: "proof_service::run", "Helios light client advance error: {}", err);
+        return;
+    }
+    let new_finalized_slot = light_client.store.finalized_header.beacon().slot;
+    if new_finalized_slot > prev_finalized_slot {
+        info!(
+            target: "proof_service::run",
+            "Helios light client advanced. Finalized slot: {} -> {}",
+            prev_finalized_slot, new_finalized_slot
+        );
+        *should_advance_redis_state = true;
+    }
+}
+
+async fn check_header_health<ProofOutput>(
+    redis_store: &mut RedisStore<ProofOutput>,
+    config: Arc<helios_ethereum::config::Config>,
+) -> Result<()>
+where
+    ProofOutput: Clone + Serialize + DeserializeOwned + Send + Sync + 'static,
+{
+    match get_stored_header_age(redis_store, config).await {
+        Ok(age) => {
+            match age {
+                Some(age) => {
+                    let max_age = chrono::TimeDelta::from_std(MAX_FINALIZED_HEADER_AGE).unwrap();
+                    if age > max_age {
+                        error!(target: "proof_service::header_check", "stored header too old. Age {}s , max age {}s", age.num_seconds(), max_age.num_seconds());
+                        Err(anyhow!(
+                            "stored header too old, shutting down. Age {} , max age {}",
+                            age,
+                            max_age
+                        ))
                     } else {
-                        debug!(target: "proof_service::run", "Redis state advancement called but no update occurred for slot {}", light_client.store.finalized_header.beacon().slot);
+                        debug!(target: "proof_service::header_check", "Header is healthy. Age {}s", age.num_seconds());
+                        Ok(())
                     }
                 }
-                Err(e) => {
-                    warn!(target: "proof_service::run", "Failed to advance Redis state for finalized header slot {}. Error: {}", light_client.store.finalized_header.beacon().slot, e);
+                None => {
+                    // This check runs after we've already updated the header at least once. So it really should be present in redis
+                    error!(
+                        target: "proof_service::header_check", "No header set in redis. Was it removed manually during bot operation?"
+                    );
+                    Err(anyhow!(
+                        "No header set in redis. Was it removed manually during bot operation?"
+                    ))
                 }
             }
         }
-
-        // Periodically check for and pick up orphaned proof generation tasks
-        if let Err(e) = proof_service.restart_orphaned_proofs().await {
-            warn!(target: "proof_service::run", "Error during orphaned proof pickup check: {}", e);
+        Err(err) => {
+            // Some redis error, will try again next cycle
+            warn!(target: "proof_service::header_check", "error checking stored header age: {}", err);
+            // return Ok, consider this error non-critical, i.e. can be recovered from
+            Ok(())
         }
+    }
+}
 
-        let _ = interval.tick().await;
-
-        let prev_finalized_slot = light_client.store.finalized_header.beacon().slot;
-        let res = light_client.advance().await;
-        if let Err(err) = res {
-            warn!(target: "proof_service::run", "Helios light client advance error: {}", err);
-            continue;
-        }
-        let new_finalized_slot = light_client.store.finalized_header.beacon().slot;
-        if new_finalized_slot > prev_finalized_slot {
-            info!(
-                target: "proof_service::run",
-                "Helios light client advanced. Finalized slot: {} -> {}",
-                prev_finalized_slot, new_finalized_slot
-            );
-            should_advance_redis_state = true;
-        }
+async fn get_stored_header_age<ProofOutput>(
+    redis_store: &mut RedisStore<ProofOutput>,
+    config: Arc<helios_ethereum::config::Config>,
+) -> Result<Option<chrono::TimeDelta>>
+where
+    ProofOutput: Clone + Serialize + DeserializeOwned + Send + Sync + 'static,
+{
+    match redis_store.read_finalized_header().await {
+        Ok(header) => match header {
+            Some(header) => Ok(Some(config.age(header.beacon().slot))),
+            None => Ok(None),
+        },
+        Err(e) => Err(anyhow!("could not read finalized header from redis: {}", e)),
     }
 }
 

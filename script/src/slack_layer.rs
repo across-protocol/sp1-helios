@@ -36,7 +36,7 @@ struct MessageExtractor<'a> {
     message_buf: &'a mut String,
 }
 
-impl<'a> Visit for MessageExtractor<'a> {
+impl Visit for MessageExtractor<'_> {
     fn record_str(&mut self, field: &Field, value: &str) {
         if field.name() == "message" && self.message_buf.is_empty() {
             self.message_buf.push_str(value);
