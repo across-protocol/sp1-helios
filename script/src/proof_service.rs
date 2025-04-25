@@ -10,7 +10,6 @@ use crate::{
 use alloy::transports::BoxFuture;
 use alloy_primitives::B256;
 use anyhow::{anyhow, Context, Result};
-use async_trait::async_trait;
 use helios_consensus_core::{
     consensus_spec::{ConsensusSpec, MainnetConsensusSpec},
     types::LightClientHeader,

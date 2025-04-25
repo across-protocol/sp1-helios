@@ -70,6 +70,14 @@ where
         let level = event.metadata().level();
         let target = event.metadata().target();
 
+        // Filter out specific warnings
+        if *level == Level::WARN
+            && target == "helios_consensus_core::consensus_core"
+            && message.starts_with("skipping block with low vote count")
+        {
+            return;
+        }
+
         let level_emoji = match *level {
             Level::ERROR => "🚨",
             Level::WARN => "⚠️",
