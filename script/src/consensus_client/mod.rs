@@ -26,8 +26,8 @@ use helios_consensus_core::{
     verify_bootstrap,
 };
 use helios_ethereum::{config::Config, rpc::ConsensusRpc};
-use tracing::{debug, info, warn};
 use tokio::time::timeout;
+use tracing::{debug, info, warn};
 
 use crate::api::ProofRequest;
 
@@ -147,6 +147,7 @@ impl<S: ConsensusSpec, R: ConsensusRpc<S> + std::fmt::Debug> Client<S, R> {
             chain: base_config.chain,
             forks: base_config.forks,
             strict_checkpoint_age: false,
+            max_checkpoint_age: 604800, // 1 week
             ..Default::default()
         };
 
