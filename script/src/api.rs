@@ -15,13 +15,13 @@ use axum::{
     routing::{get, post},
     serve, Json, Router,
 };
-use tracing::{error, info};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use std::str::FromStr;
 use std::{env, net::SocketAddr};
 use tokio::net::TcpListener;
 use tokio::task::JoinHandle;
+use tracing::{error, info};
 use utoipa::{OpenApi, ToSchema};
 use utoipa_swagger_ui::SwaggerUi;
 
@@ -125,16 +125,26 @@ where
     pub error_message: Option<String>,
 }
 
+/// Response containing the latest finalized header details
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct FinalizedHeaderResponse {
+    /// The slot number of the latest finalized header
+    pub slot: u64,
+    /// The checkpoint (tree_hash_root) of the latest finalized header, as a hex string
+    pub checkpoint: String,
+}
+
 // --- API Documentation ---
 
 #[derive(OpenApi)]
 #[openapi(
-    paths(health_handler, request_proof_handler, get_proof_handler),
+    paths(health_handler, request_proof_handler, get_proof_handler, get_finalized_header_handler),
     components(
         schemas(
             ApiProofRequest,
             ProofStatusResponse,
             ProofRequestResponse,
+            FinalizedHeaderResponse,
             // list all appropriate ProofStateResponse variants as we add new proof backends.
             ProofStateResponse<SP1HeliosProofData>
         )
@@ -288,6 +298,31 @@ where
     Ok((StatusCode::OK, Json(response_state)))
 }
 
+/// Handler function for retrieving the latest finalized header details
+#[utoipa::path(
+    get,
+    path = "/api/finalized-header",
+    tag = "helios-proof-service",
+    responses(
+        (status = 200, description = "Latest finalized header details retrieved", body = FinalizedHeaderResponse),
+        (status = 404, description = "Finalized header not found in storage"),
+        (status = 500, description = "Internal server error")
+    )
+)]
+async fn get_finalized_header_handler<B>(
+    State(mut service): State<ProofService<B>>,
+) -> Result<impl IntoResponse, ProofServiceError>
+where
+    B: ProofBackend + Clone + Send + Sync + 'static,
+{
+    match service.get_finalized_header_details().await? {
+        Some(header_details) => Ok((StatusCode::OK, Json(header_details))),
+        None => Err(ProofServiceError::Internal(
+            "Finalized header not found in Redis.".to_string(),
+        )),
+    }
+}
+
 // --- API Service Trait --- //
 
 /// Defines the interface for the proof service exposed via the API.
@@ -322,6 +357,7 @@ where
         .route("/health", get(health_handler))
         .route("/api/proofs", post(request_proof_handler))
         .route("/api/proofs/{id}", get(get_proof_handler))
+        .route("/api/finalized-header", get(get_finalized_header_handler))
         .merge(SwaggerUi::new("/swagger-ui").url("/api-docs/openapi.json", ApiDoc::openapi()))
         .with_state(proof_service)
 }

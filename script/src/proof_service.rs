@@ -1,5 +1,5 @@
 use crate::{
-    api::ProofRequest,
+    api::{FinalizedHeaderResponse, ProofRequest},
     consensus_client::{self, ConfigExt},
     proof_backends::ProofBackend,
     redis_store::RedisStore,
@@ -16,12 +16,12 @@ use helios_ethereum::rpc::http_rpc::HttpRpc;
 use sp1_helios_primitives::types::{ContractStorage, ProofInputs, StorageSlot};
 use tree_hash::TreeHash;
 
-use tracing::{debug, error, info, warn};
 use std::env;
 use std::str::FromStr;
 use std::time::Duration;
 use tokio::time::{interval_at, Instant};
 use tokio_util::sync::CancellationToken;
+use tracing::{debug, error, info, warn};
 
 const INITIAL_PROOF_GENERATION_LOCK_DURATION_MS: u64 = 1000;
 
@@ -49,6 +49,24 @@ where
         id: &ProofId,
     ) -> Result<Option<ProofRequestState<B::ProofOutput>>, ProofServiceError> {
         self.redis_store.get_proof_state(id).await
+    }
+
+    /// Retrieves the latest finalized header details from Redis.
+    pub async fn get_finalized_header_details(
+        &mut self,
+    ) -> Result<Option<FinalizedHeaderResponse>, ProofServiceError> {
+        match self.redis_store.read_finalized_header().await? {
+            Some(header) => {
+                let slot = header.beacon().slot;
+                let checkpoint = header.beacon().tree_hash_root();
+                let response = FinalizedHeaderResponse {
+                    slot,
+                    checkpoint: checkpoint.to_string(), // Convert B256 to hex string
+                };
+                Ok(Some(response))
+            }
+            None => Ok(None),
+        }
     }
 
     pub async fn request_proof(
