@@ -30,6 +30,7 @@ const FINALIZED_HEADER_AGE_BUFFER_SECS: u64 = 180; // 3 minutes
 const MAX_FINALIZED_HEADER_AGE: std::time::Duration =
     Duration::from_secs(12 * 32 * 3 + FINALIZED_HEADER_AGE_BUFFER_SECS); // max legit finalized header age: 3 epochs + buffer to allow for an update to happen
 const INITIAL_PROOF_GENERATION_LOCK_DURATION_MS: u64 = 1000;
+const MAX_GET_PROOF_INPUTS_ATTEMPTS: i32 = 3;
 
 /// Service responsible for managing the lifecycle of ZK proof generation requests.
 ///
@@ -387,11 +388,8 @@ impl<B> ProofService<B>
 where
     B: ProofBackend + Clone + Send + Sync,
 {
-    /// Initialize a new ProofService with configuration from environment variables
     pub async fn new(proof_backend: B) -> anyhow::Result<Self> {
-        // Initialize RedisStore
         let redis_store = RedisStore::new().await?;
-
         let execution_rpc_proxy = execution::Proxy::try_from_env()?;
 
         let service = Self {
@@ -404,9 +402,32 @@ where
         Ok(service)
     }
 
-    /// Fetches the necessary inputs for proof generation based on the request.
-    /// This involves interacting with consensus and execution layer RPC proxies.
     async fn get_proof_inputs(&self, request: &ProofRequest) -> anyhow::Result<ProofInputs> {
+        let mut attempt = 0;
+        loop {
+            match self.get_proof_inputs_once(request).await {
+                Ok(inputs) => return Ok(inputs),
+                Err(e) => {
+                    attempt += 1;
+                    let proof_id_hex = ProofId::new(request).to_hex_string();
+                    if attempt >= MAX_GET_PROOF_INPUTS_ATTEMPTS {
+                        warn!(target: "proof_service::proof_inputs", "All {} attempts exhausted for proof id {}. Last error: {}", MAX_GET_PROOF_INPUTS_ATTEMPTS, proof_id_hex, e);
+                        return Err(anyhow!(
+                            "Failed to get proof inputs after {} attempts for proof id {}: {}",
+                            MAX_GET_PROOF_INPUTS_ATTEMPTS,
+                            proof_id_hex,
+                            e
+                        ));
+                    } else {
+                        warn!(target: "proof_service::proof_inputs", "Attempt {} failed for proof id {}: {}. Retrying in 12s...", attempt, proof_id_hex, e);
+                        tokio::time::sleep(Duration::from_secs(12)).await;
+                    }
+                }
+            }
+        }
+    }
+
+    async fn get_proof_inputs_once(&self, request: &ProofRequest) -> anyhow::Result<ProofInputs> {
         let consensus_proof_inputs =
             consensus_client::get_proof_inputs::<MainnetConsensusSpec>(request).await?;
 
@@ -479,7 +500,7 @@ where
         mut proof_service: ProofService<B>,
         proof_id: ProofId,
     ) {
-        debug!(
+        info!(
             target: "proof_service::generate",
             "[ProofID: {}] Starting proof generation", proof_id.to_hex_string()
         );
@@ -527,8 +548,13 @@ where
             }
         });
 
-        // todo: consider retrying here a couple of times with a substantial delay between retries, e.g. 1 slot
         let inputs = proof_service.get_proof_inputs(&request).await;
+        if inputs.is_ok() {
+            info!(
+                target: "proof_service::generate",
+                "[ProofID: {}] Successfully generated proof inputs", proof_id.to_hex_string()
+            );
+        }
 
         let proof_output_result = match inputs {
             Ok(inputs) => proof_service.proof_backend.generate_proof(inputs).await,
