@@ -14,12 +14,11 @@ use sp1_helios_primitives::types::{
 use tree_hash::TreeHash;
 
 /// Program flow:
-/// 1. Apply sync committee updates, if any
-/// 2. Apply finality update
-/// 3. Verify execution state root proof
+/// 1. Verify and apply sync committee updates, if any
+/// 2. Verify and apply finality update
+/// 3. Ensure finalized head was incremented, to confirm integrity of execution part of finalized header
 /// 4. Verify storage slot proofs
-/// 5. Asset all updates are valid
-/// 6. Commit new state root, header, and sync committee for usage in the on-chain contract
+/// 5. Commit new state root, header, and sync committee for usage in the on-chain contract
 pub fn main() {
     let encoded_inputs = sp1_zkvm::io::read_vec();
 
@@ -37,7 +36,7 @@ pub fn main() {
     let prev_header: B256 = store.finalized_header.beacon().tree_hash_root();
     let prev_head = store.finalized_header.beacon().slot;
 
-    // 1. Apply sync committee updates, if any
+    // 1. Verify and apply sync committee updates, if any
     for (index, update) in sync_committee_updates.iter().enumerate() {
         println!(
             "Processing update {} of {}.",
@@ -54,7 +53,7 @@ pub fn main() {
         apply_update(&mut store, update);
     }
 
-    // 2. Apply finality update
+    // 2. Verify and apply finality update
     let finality_update_is_valid = verify_finality_update(
         &finality_update,
         expected_current_slot,
@@ -70,16 +69,21 @@ pub fn main() {
 
     apply_finality_update(&mut store, &finality_update);
 
-    // 3. Verify storage slot proofs
+    // 3. Ensure finalized head was incremented, to confirm integrity of execution part of finalized header
+    // This check confirms the execution_payload referenced by the finalized_header corresponds to
+    // this newer slot, due to checks against beacon_body_root performed during update verification.
+    assert!(store.finalized_header.beacon().slot > prev_head);
+
     let execution_state_root = *store
         .finalized_header
         .execution()
         .expect("Execution payload doesn't exist.")
         .state_root();
 
+    // 4. Verify storage slot proofs
     let verified_slots = verify_storage_slot_proofs(execution_state_root, contract_storage_slots);
 
-    // 4. Commit new state root, header, and sync committee for usage in the on-chain contract
+    // 5. Commit new state root, header, and sync committee for usage in the on-chain contract
     let header: B256 = store.finalized_header.beacon().tree_hash_root();
     let sync_committee_hash: B256 = store.current_sync_committee.tree_hash_root();
     let next_sync_committee_hash: B256 = match &mut store.next_sync_committee {
@@ -116,12 +120,12 @@ fn verify_storage_slot_proofs(
         .expected_value
         .encode(&mut rlp_encoded_trie_account);
 
-    // 1) Verify the contract's account node in the *global* MPT:
-    //    We expect to find 'contract_trie_value_bytes' as the 'value' for this address.
+    // 1) Verify the contract's account node in the global MPT:
+    //    We expect to find `rlp_encoded_trie_account` as the trie value for this address.
     if let Err(e) = proof::verify_proof(
         execution_state_root,
         address_nibbles,
-        Some(rlp_encoded_trie_account.clone()),
+        Some(rlp_encoded_trie_account),
         &contract_storage.mpt_proof,
     ) {
         panic!(
