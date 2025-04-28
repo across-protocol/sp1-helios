@@ -39,14 +39,12 @@ contract DeployScript is Script {
         // Manually parse each field from the JSON. Required because of `updaters` memory allocations
         params.executionStateRoot = vm.parseJsonBytes32(json, ".executionStateRoot");
         params.genesisTime = vm.parseJsonUint(json, ".genesisTime");
-        params.genesisValidatorsRoot = vm.parseJsonBytes32(json, ".genesisValidatorsRoot");
         params.head = vm.parseJsonUint(json, ".head");
         params.header = vm.parseJsonBytes32(json, ".header");
         params.heliosProgramVkey = vm.parseJsonBytes32(json, ".heliosProgramVkey");
         params.secondsPerSlot = vm.parseJsonUint(json, ".secondsPerSlot");
         params.slotsPerEpoch = vm.parseJsonUint(json, ".slotsPerEpoch");
         params.slotsPerPeriod = vm.parseJsonUint(json, ".slotsPerPeriod");
-        params.sourceChainId = vm.parseJsonUint(json, ".sourceChainId");
         params.syncCommitteeHash = vm.parseJsonBytes32(json, ".syncCommitteeHash");
         params.verifier = vm.parseJsonAddress(json, ".verifier");
         params.updaters = vm.parseJsonAddressArray(json, ".updaters");

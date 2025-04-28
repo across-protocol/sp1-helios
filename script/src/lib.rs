@@ -235,7 +235,7 @@ pub fn init_tracing() -> anyhow::Result<()> {
         }
         _ => {
             // No Slack webhook URL found, just init with console
-            println!("No SLACK_WEBHOOK_URL found, skipping Slack layer initialization."); // Use println!
+            println!("No SLACK_WEBHOOK_URL found, skipping Slack layer initialization.");
             subscriber.init();
         }
     }

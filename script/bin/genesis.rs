@@ -4,9 +4,8 @@ use anyhow::Result;
 /// Generate genesis parameters for light client contract
 use clap::Parser;
 use helios_consensus_core::consensus_spec::MainnetConsensusSpec;
-use helios_ethereum::rpc::http_rpc::HttpRpc;
 use serde::{Deserialize, Serialize};
-use sp1_helios_script::{get_checkpoint, get_client, get_latest_checkpoint};
+use sp1_helios_script::{get_checkpoint, get_client, get_latest_checkpoint, rpc_proxies};
 use sp1_sdk::{utils, HashableKey, Prover, ProverClient};
 use std::{
     env, fs,
@@ -30,14 +29,12 @@ pub struct GenesisArgs {
 pub struct GenesisConfig {
     pub execution_state_root: String,
     pub genesis_time: u64,
-    pub genesis_validators_root: String,
     pub head: u64,
     pub header: String,
     pub helios_program_vkey: String,
     pub seconds_per_slot: u64,
     pub slots_per_epoch: u64,
     pub slots_per_period: u64,
-    pub source_chain_id: u64,
     pub sync_committee_hash: String,
     pub verifier: String,
     pub updaters: Vec<String>,
@@ -76,7 +73,9 @@ pub async fn main() -> Result<()> {
         verifier = env::var("SP1_VERIFIER_ADDRESS").unwrap().parse().unwrap();
     }
 
-    let helios_client = get_client::<MainnetConsensusSpec, HttpRpc>(checkpoint).await;
+    let helios_client =
+        get_client::<MainnetConsensusSpec, rpc_proxies::consensus::ConsensusRpcProxy>(checkpoint)
+            .await;
     let finalized_header = helios_client
         .store
         .finalized_header
@@ -90,17 +89,9 @@ pub async fn main() -> Result<()> {
         .clone()
         .tree_hash_root();
     let genesis_time = helios_client.config.chain.genesis_time;
-    let genesis_root = helios_client.config.chain.genesis_root;
     const SECONDS_PER_SLOT: u64 = 12;
     const SLOTS_PER_EPOCH: u64 = 32;
     const SLOTS_PER_PERIOD: u64 = SLOTS_PER_EPOCH * 256;
-    let source_chain_id: u64 = match env::var("SOURCE_CHAIN_ID") {
-        Ok(val) => val.parse().unwrap(),
-        Err(_) => {
-            println!("SOURCE_CHAIN_ID not set, defaulting to mainnet");
-            1 // Mainnet chain ID
-        }
-    };
 
     // Get the workspace root with cargo metadata to make the paths.
     let workspace_root = PathBuf::from(
@@ -113,12 +104,10 @@ pub async fn main() -> Result<()> {
     // Read the Genesis config from the contracts directory.
     let mut genesis_config = get_existing_genesis_config(&workspace_root)?;
 
-    genesis_config.genesis_validators_root = format!("0x{:x}", genesis_root);
     genesis_config.genesis_time = genesis_time;
     genesis_config.seconds_per_slot = SECONDS_PER_SLOT;
     genesis_config.slots_per_period = SLOTS_PER_PERIOD;
     genesis_config.slots_per_epoch = SLOTS_PER_EPOCH;
-    genesis_config.source_chain_id = source_chain_id;
     genesis_config.sync_committee_hash = format!("0x{:x}", sync_committee_hash);
     genesis_config.header = format!("0x{:x}", finalized_header);
     genesis_config.execution_state_root = format!(
