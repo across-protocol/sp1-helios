@@ -55,12 +55,9 @@ where
     S: Subscriber + for<'a> LookupSpan<'a>,
 {
     fn on_event(&self, event: &Event, _ctx: Context<S>) {
-        let relevant_event = (event.metadata().target() == "proof_service::generate"
-            && *event.metadata().level() <= Level::DEBUG)
-            || *event.metadata().level() <= self.threshold;
-        if !relevant_event {
-            return;
-        }
+        let metadata = event.metadata();
+        let level = *metadata.level();
+        let target = metadata.target();
 
         let mut message = String::new();
         let mut visitor = MessageExtractor {
@@ -68,19 +65,33 @@ where
         };
         event.record(&mut visitor);
 
+        let is_relevant_generate_event =
+            target == "proof_service::generate" && level <= Level::DEBUG;
+        let is_below_threshold = level <= self.threshold;
+
+        let is_useful_sp1_event = target == "sp1_sdk::network::prover"
+            && (message.starts_with("Created request")
+                || message.starts_with("View request status at:")
+                || message.starts_with("Proof request assigned"));
+
+        let relevant_event =
+            is_relevant_generate_event || is_below_threshold || is_useful_sp1_event;
+
+        if !relevant_event {
+            return;
+        }
+
         let ts = Local::now().format("%Y-%m-%dT%H:%M:%S%.3f");
-        let level = event.metadata().level();
-        let target = event.metadata().target();
 
         // Filter out specific warnings
-        if *level == Level::WARN
+        if level == Level::WARN
             && target == "helios_consensus_core::consensus_core"
             && message.starts_with("skipping block with low vote count")
         {
             return;
         }
 
-        let level_emoji = match *level {
+        let level_emoji = match level {
             Level::ERROR => "🚨",
             Level::WARN => "⚠️",
             Level::INFO => "ℹ️",
