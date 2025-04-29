@@ -55,7 +55,8 @@ where
     S: Subscriber + for<'a> LookupSpan<'a>,
 {
     fn on_event(&self, event: &Event, _ctx: Context<S>) {
-        let relevant_event = event.metadata().target() == "proof_service::generate"
+        let relevant_event = (event.metadata().target() == "proof_service::generate"
+            && *event.metadata().level() <= Level::DEBUG)
             || *event.metadata().level() <= self.threshold;
         if !relevant_event {
             return;
