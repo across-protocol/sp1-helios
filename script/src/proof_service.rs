@@ -24,7 +24,7 @@ use std::time::Duration;
 use std::{env, sync::Arc};
 use tokio::time::{interval_at, Instant};
 use tokio_util::sync::CancellationToken;
-use tracing::{debug, error, info, warn};
+use tracing::{debug, error, info, trace, warn};
 
 const FINALIZED_HEADER_AGE_BUFFER_SECS: u64 = 180; // 3 minutes
 const MAX_FINALIZED_HEADER_AGE: std::time::Duration =
@@ -528,7 +528,7 @@ where
                         // Use redis_store to extend the lock
                         match redis_store_clone.extend_proof_generation_lock(&proof_id, 2000).await {
                             Ok(true) => {
-                                debug!(target: "proof_service::generate", "[ProofID: {}] Extended worker lock.", proof_id.to_hex_string());
+                                trace!(target: "proof_service::generate", "[ProofID: {}] Extended worker lock.", proof_id.to_hex_string());
                             }
                             Ok(false) => {
                                 warn!(target: "proof_service::generate", "[ProofID: {}] Failed to extend worker lock: Lock key does not exist or expired.", proof_id.to_hex_string());

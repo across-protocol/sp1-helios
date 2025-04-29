@@ -55,8 +55,9 @@ where
     S: Subscriber + for<'a> LookupSpan<'a>,
 {
     fn on_event(&self, event: &Event, _ctx: Context<S>) {
-        // 1) Level filter: Reject events LESS severe than the threshold
-        if *event.metadata().level() > self.threshold {
+        let relevant_event = event.metadata().target() == "proof_service::generate"
+            || *event.metadata().level() <= self.threshold;
+        if !relevant_event {
             return;
         }
 
@@ -98,7 +99,7 @@ where
             )
         };
 
-        // 4) Fire-and-forget async post
+        // Fire-and-forget async post
         let client = self.client.clone();
         let url = self.webhook.clone();
         let text = final_text;
