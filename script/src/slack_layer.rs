@@ -69,7 +69,8 @@ where
             target == "proof_service::generate" && level <= Level::DEBUG;
         let is_below_threshold = level <= self.threshold;
 
-        let is_useful_sp1_event = target == "sp1_sdk::network::prover"
+        // todo? A not so pretty way to catch some of the sp1-specific logs
+        let is_useful_sp1_event = level == Level::INFO
             && (message.starts_with("Created request")
                 || message.starts_with("View request status at:")
                 || message.starts_with("Proof request assigned"));
