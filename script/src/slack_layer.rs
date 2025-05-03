@@ -75,8 +75,15 @@ where
                 || message.starts_with("View request status at:")
                 || message.starts_with("Proof request assigned"));
 
-        let relevant_event =
-            is_relevant_generate_event || is_below_threshold || is_useful_sp1_event;
+        // Explicitly include the main loop start message
+        let is_main_loop_start_event = level == Level::INFO
+            && target == "proof_service::run"
+            && message.starts_with("Starting main loop");
+
+        let relevant_event = is_relevant_generate_event
+            || is_below_threshold
+            || is_useful_sp1_event
+            || is_main_loop_start_event;
 
         if !relevant_event {
             return;
@@ -93,22 +100,29 @@ where
         }
 
         let level_emoji = match level {
-            Level::ERROR => "🚨",
+            Level::ERROR => "❌",
             Level::WARN => "⚠️",
-            Level::INFO => "ℹ️",
-            Level::DEBUG => "🐛",
+            Level::INFO => "✅",
+            Level::DEBUG => "🛠️",
             Level::TRACE => "👣",
+        };
+
+        // Override the target for specific SP1 SDK logs for better clarity
+        let display_target = if is_useful_sp1_event {
+            "sp1_sdk"
+        } else {
+            target
         };
 
         let final_text = if message.is_empty() {
             format!(
                 "`{} [{:<5}]` {} `[{}]` Event occurred (no message field)",
-                ts, level, level_emoji, target
+                ts, level, level_emoji, display_target
             )
         } else {
             format!(
                 "`{} [{:<5}]` {} `[{}]` {}",
-                ts, level, level_emoji, target, message
+                ts, level, level_emoji, display_target, message
             )
         };
 
