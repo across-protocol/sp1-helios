@@ -50,8 +50,8 @@ impl From<ProofRequestStatus> for ProofStatusResponse {
 pub struct ApiProofRequest {
     /// Contract address to prove a storage slot for (hex string with 0x prefix)
     pub src_chain_contract_address: String,
-    /// Storage slot key to prove (hex string with 0x prefix)
-    pub src_chain_storage_slot: String,
+    /// Storage slot keys to prove (list of hex strings with 0x prefix)
+    pub src_chain_storage_slots: Vec<String>,
     /// Minumum block number required for the storage to Be present (e.g. the block number of TX that set the storage slot above)
     pub src_chain_block_number: u64,
     /// A stored head on destination chain Helios contract
@@ -65,8 +65,8 @@ pub struct ApiProofRequest {
 pub struct ProofRequest {
     /// Contract address to prove a storage slot for
     pub src_chain_contract_address: Address,
-    /// Storage slot key to prove
-    pub src_chain_storage_slot: B256,
+    /// Storage slot keys to prove
+    pub src_chain_storage_slots: Vec<B256>,
     /// Minumum block number required for the storage to Be present (e.g. the block number of TX that set the storage slot above)
     pub src_chain_block_number: u64,
     /// A stored head on destination chain Helios contract
@@ -79,20 +79,35 @@ impl TryFrom<ApiProofRequest> for ProofRequest {
     type Error = ProofServiceError;
 
     fn try_from(req: ApiProofRequest) -> Result<Self, Self::Error> {
+        let src_chain_contract_address = Address::from_str(&req.src_chain_contract_address)
+            .map_err(|_| {
+                ProofServiceError::Internal("Invalid contract address format".to_string())
+            })?;
+
+        // Iterate over the input vector of strings, parse each to B256.
+        // collect() stops on the first error, otherwise collects into a Vec<B256>.
+        let src_chain_storage_slots: Vec<B256> = req
+            .src_chain_storage_slots
+            .iter()
+            .map(|s| {
+                B256::from_str(s).map_err(|_| {
+                    ProofServiceError::Internal("Invalid storage slot format".to_string())
+                })
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+
+        let dst_chain_contract_from_header = B256::from_str(&req.dst_chain_contract_from_header)
+            .map_err(|_| {
+                // Use a more specific error message for the header
+                ProofServiceError::Internal("Invalid header format".to_string())
+            })?;
+
         Ok(ProofRequest {
-            src_chain_contract_address: Address::from_str(&req.src_chain_contract_address)
-                .map_err(|_| {
-                    ProofServiceError::Internal("Invalid contract address format".to_string())
-                })?,
-            src_chain_storage_slot: B256::from_str(&req.src_chain_storage_slot).map_err(|_| {
-                ProofServiceError::Internal("Invalid storage slot format".to_string())
-            })?,
+            src_chain_contract_address,
+            src_chain_storage_slots,
             src_chain_block_number: req.src_chain_block_number,
             dst_chain_contract_from_head: req.dst_chain_contract_from_head,
-            dst_chain_contract_from_header: B256::from_str(&req.dst_chain_contract_from_header)
-                .map_err(|_| {
-                    ProofServiceError::Internal("Invalid storage slot format".to_string())
-                })?,
+            dst_chain_contract_from_header,
         })
     }
 }

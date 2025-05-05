@@ -72,13 +72,13 @@ impl Proxy {
     pub async fn get_proof(
         &self,
         address: Address,
-        keys: Vec<B256>,
-        // todo? We don't have to require block_id like that. It's easiest for now. Option<BlockId>
+        keys: &[B256],
+        // todo? We don't have to require block_id like that. It's easiest for now. `Option<BlockId>`
         block_id: BlockId,
     ) -> Result<EIP1186AccountProofResponse> {
         let proof = multiplex(
             |client| {
-                let keys = keys.clone();
+                let keys = keys.to_owned();
                 (async move { Self::get_proof_and_check(client, address, keys, block_id).await })
                     .boxed()
             },
@@ -89,7 +89,7 @@ impl Proxy {
     }
 
     /// Requests Merkle proof from execution client. Times out if it rpc call takes longer than 5 seconds
-    // todo: add retries to this via retri
+    // todo? add retries to this. We're using multiple trustworthy RPCs in prod, so at least one should retrun a fine result
     async fn get_proof_and_check(
         client: RootProvider<Http<Client>>,
         address: Address,

@@ -440,37 +440,34 @@ where
             .map_err(|_| anyhow!("No execution header in finality update".to_string()))?;
 
         let block_id = (*latest_finalized_execution_header.block_number()).into();
-        debug!(target: "proof_service::input", "Fetching storage proof for address {} slot {} at block ID {:?}", request.src_chain_contract_address, request.src_chain_storage_slot, block_id);
+        debug!(target: "proof_service::input", "Fetching storage proof for address {} slot {:?} at block ID {:?}", request.src_chain_contract_address, request.src_chain_storage_slots, block_id);
 
         // Get execution part of ProofInputs
         let proof = self
             .execution_rpc_proxy
             .get_proof(
                 request.src_chain_contract_address,
-                vec![request.src_chain_storage_slot],
+                &request.src_chain_storage_slots,
                 block_id,
             )
             .await
             .context("Failed to get storage proof using execution provider proxy")
             .map_err(|e| anyhow!(e.to_string()))?;
 
-        // Assemble the ProofInputs struct
-        let storage_slot = StorageSlot {
-            key: request.src_chain_storage_slot,
-            expected_value: proof
-                .storage_proof
-                .first()
-                .context("Storage proof vector was empty")
-                .map_err(|e| anyhow!(e.to_string()))?
-                .value,
-            mpt_proof: proof
-                .storage_proof
-                .first()
-                .context("Storage proof vector was empty")
-                .map_err(|e| anyhow!(e.to_string()))?
-                .proof
-                .clone(),
-        };
+        if proof.storage_proof.len() != request.src_chain_storage_slots.len() {
+            return Err(anyhow!("Merkle proof length mismatch."));
+        }
+
+        let storage_slots: Vec<StorageSlot> = request
+            .src_chain_storage_slots
+            .iter()
+            .zip(proof.storage_proof.into_iter())
+            .map(|(&key, proof_item)| StorageSlot {
+                key,
+                expected_value: proof_item.value,
+                mpt_proof: proof_item.proof,
+            })
+            .collect();
 
         let inputs = ProofInputs {
             sync_committee_updates: consensus_proof_inputs.sync_committee_updates,
@@ -488,7 +485,7 @@ where
                     code_hash: proof.code_hash,
                 },
                 mpt_proof: proof.account_proof,
-                storage_slots: vec![storage_slot],
+                storage_slots,
             },
         };
 
