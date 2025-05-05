@@ -31,12 +31,23 @@ contract DeployScript is Script {
         return address(helios);
     }
 
-    function readGenesisConfig() public returns (SP1Helios.InitParams memory) {
+    function readGenesisConfig() public view returns (SP1Helios.InitParams memory params) {
         string memory root = vm.projectRoot();
         string memory path = string.concat(root, "/", "genesis.json");
         string memory json = vm.readFile(path);
-        bytes memory data = vm.parseJson(json);
-        return abi.decode(data, (SP1Helios.InitParams));
+
+        // Manually parse each field from the JSON. Required because of `updaters` memory allocations
+        params.executionStateRoot = vm.parseJsonBytes32(json, ".executionStateRoot");
+        params.genesisTime = vm.parseJsonUint(json, ".genesisTime");
+        params.head = vm.parseJsonUint(json, ".head");
+        params.header = vm.parseJsonBytes32(json, ".header");
+        params.heliosProgramVkey = vm.parseJsonBytes32(json, ".heliosProgramVkey");
+        params.secondsPerSlot = vm.parseJsonUint(json, ".secondsPerSlot");
+        params.slotsPerEpoch = vm.parseJsonUint(json, ".slotsPerEpoch");
+        params.slotsPerPeriod = vm.parseJsonUint(json, ".slotsPerPeriod");
+        params.syncCommitteeHash = vm.parseJsonBytes32(json, ".syncCommitteeHash");
+        params.verifier = vm.parseJsonAddress(json, ".verifier");
+        params.updaters = vm.parseJsonAddressArray(json, ".updaters");
     }
 
     function updateGenesisConfig() public {

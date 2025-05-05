@@ -3,19 +3,19 @@ use alloy::{
     network::EthereumWallet, primitives::Address, providers::ProviderBuilder,
     signers::local::PrivateKeySigner, sol,
 };
-use alloy_primitives::{B256, U256};
-use anyhow::Result;
+use alloy_primitives::{address, b256, B256, U256};
+use anyhow::{Context, Result};
 use helios_consensus_core::consensus_spec::MainnetConsensusSpec;
 use helios_ethereum::consensus::Inner;
-use helios_ethereum::rpc::http_rpc::HttpRpc;
 use helios_ethereum::rpc::ConsensusRpc;
-use log::{error, info};
 use reqwest::Url;
-use sp1_helios_primitives::types::{ContractStorage, ProofInputs};
+use sp1_helios_primitives::types::{ContractStorage, ProofInputs, StorageSlot};
+use sp1_helios_script::rpc_proxies::consensus::ConsensusRpcProxy;
 use sp1_helios_script::*;
 use sp1_sdk::{EnvProver, ProverClient, SP1ProofWithPublicValues, SP1ProvingKey, SP1Stdin};
 use std::env;
 use std::time::Duration;
+use tracing::{error, info};
 use tree_hash::TreeHash;
 
 const ELF: &[u8] = include_bytes!("../../elf/sp1-helios-elf");
@@ -25,6 +25,7 @@ struct SP1HeliosOperator {
     pk: SP1ProvingKey,
     wallet: EthereumWallet,
     rpc_url: Url,
+    source_execution_rpc_url: Url,
     contract_address: Address,
     relayer_address: Address,
 }
@@ -88,6 +89,12 @@ impl SP1HeliosOperator {
             .parse()
             .unwrap();
 
+        // required for storage slot merkle proving
+        let source_execution_rpc_url = env::var("SOURCE_EXECUTION_RPC_URL")
+            .expect("SOURCE_EXECUTION_RPC_URL not set")
+            .parse()
+            .unwrap();
+
         let private_key = env::var("PRIVATE_KEY").expect("PRIVATE_KEY not set");
         let contract_address: Address = env::var("CONTRACT_ADDRESS")
             .expect("CONTRACT_ADDRESS not set")
@@ -102,6 +109,7 @@ impl SP1HeliosOperator {
             pk,
             wallet,
             rpc_url,
+            source_execution_rpc_url,
             contract_address,
             relayer_address,
         }
@@ -110,12 +118,17 @@ impl SP1HeliosOperator {
     /// Fetch values and generate an 'update' proof for the SP1 Helios contract.
     async fn request_update(
         &self,
-        mut client: Inner<MainnetConsensusSpec, HttpRpc>,
+        mut client: Inner<MainnetConsensusSpec, ConsensusRpcProxy>,
     ) -> Result<Option<SP1ProofWithPublicValues>> {
         // Fetch required values.
         let provider = ProviderBuilder::new().on_http(self.rpc_url.clone());
+
+        let src_exec_provider =
+            ProviderBuilder::new().on_http(self.source_execution_rpc_url.clone());
         let contract = SP1Helios::new(self.contract_address, provider);
-        let head: u64 = contract
+
+        // contract head refers to a slot number
+        let current_contract_head: u64 = contract
             .head()
             .call()
             .await
@@ -124,7 +137,7 @@ impl SP1HeliosOperator {
             .try_into()
             .unwrap();
         let period: u64 = contract
-            .getSyncCommitteePeriod(U256::from(head))
+            .getSyncCommitteePeriod(U256::from(current_contract_head))
             .call()
             .await
             .unwrap()
@@ -141,12 +154,26 @@ impl SP1HeliosOperator {
         let mut stdin = SP1Stdin::new();
 
         // Setup client.
+        // !!! `get_updates` gets updates from the current finalized block SYNC_COMMITEE_PERIOD with a cap of 128 updates
+        // Why does it cover only only 128 updates? I think there are 256 possible updates during a commitee period...
+        // !!! So this has nothing to do with how client is bootstrapped! Client has to be bootstrapped with a correct root
+        // to be able to check the correctness of all transitions provided to it.
+        // Look at the name of the variable though. Is it sync committee updates, not block finality updates being fetched?
         let mut sync_committee_updates = get_updates(&client).await;
+        // I think, gets only the last finality update
         let finality_update = client.rpc.get_finality_update().await.unwrap();
 
         // Check if contract is up to date
-        let latest_block = finality_update.finalized_header().beacon().slot;
-        if latest_block <= head {
+        let latest_finalized_header = finality_update.finalized_header();
+        // todo: can't execution_payload_header be empty when there's no block proposed for a slot?
+        // todo: maybe that's when it returns an error.
+        let latest_finalized_execution_header = latest_finalized_header
+            .execution()
+            // todo: is error empty from .execution() call?
+            .map_err(|_e| anyhow::anyhow!("Failed to get execution payload header"))?;
+
+        let latest_slot = latest_finalized_header.beacon().slot;
+        if latest_slot <= current_contract_head {
             info!("Contract is up to date. Nothing to update.");
             return Ok(None);
         }
@@ -174,6 +201,43 @@ impl SP1HeliosOperator {
 
         // Create program inputs
         let expected_current_slot = client.expected_current_slot();
+
+        // constants for POC testing
+        let hub_pool_store_addr = address!("0xdD6Fa55b12aA2a937BA053d610D76f20cC235c09");
+        let storage_key = b256!("ad3228b676f7d3cd4284a5443f17f1962b36e491b30a40b2405849e597ba5fb5");
+
+        let latest_execution_block_number = *latest_finalized_execution_header.block_number();
+        println!(
+            "latest execution block number: {:?}",
+            latest_execution_block_number
+        );
+
+        let proof = src_exec_provider
+            .get_proof(hub_pool_store_addr, vec![storage_key])
+            .block_id(latest_execution_block_number.into())
+            .await?;
+
+        // encode bytes32 from contract into U256 -- the format we require here
+        let expected_value = U256::from_str_radix(
+            "e955e8270bae4ffaee6178c273b4041cb56abb9b5f4dc6a0aff5bfd232d2a6ea",
+            16,
+        )
+        .expect("Invalid hex string for U256");
+
+        assert!(
+            expected_value.eq(&proof.storage_proof[0].value),
+            "expected_value != value from get_proof"
+        );
+
+        let storage_slot = StorageSlot {
+            key: storage_key,
+            expected_value,
+            mpt_proof: proof.storage_proof[0].proof.clone(),
+        };
+
+        // Get the latest finalized slot number for user confirmation
+        let latest_finalized_slot = latest_finalized_header.beacon().slot;
+
         let inputs = ProofInputs {
             sync_committee_updates,
             finality_update,
@@ -182,19 +246,46 @@ impl SP1HeliosOperator {
             genesis_root: client.config.chain.genesis_root,
             forks: client.config.forks.clone(),
             contract_storage_slots: ContractStorage {
-                address: todo!(),
-                expected_value: todo!(),
-                mpt_proof: todo!(),
-                storage_slots: todo!(),
+                address: proof.address,
+                expected_value: alloy_trie::TrieAccount {
+                    nonce: proof.nonce,
+                    balance: proof.balance,
+                    storage_root: proof.storage_hash,
+                    code_hash: proof.code_hash,
+                },
+                mpt_proof: proof.account_proof,
+                storage_slots: vec![storage_slot],
             },
         };
         let encoded_proof_inputs = serde_cbor::to_vec(&inputs)?;
         stdin.write_slice(&encoded_proof_inputs);
 
+        // Ask for user confirmation before proceeding
+        println!(
+            "Generating proof for finalized header: {}",
+            latest_finalized_slot
+        );
+        println!("Do you want to continue? [y/N]");
+
+        // Read user input
+        let mut input = String::new();
+        std::io::stdin()
+            .read_line(&mut input)
+            .expect("Failed to read input");
+
+        // Check if user wants to continue
+        let input = input.trim().to_lowercase();
+        if input != "y" && input != "yes" {
+            println!("Operation cancelled by user.");
+            return Ok(None);
+        }
+
+        println!("Continuing with proof generation...");
+
         // Generate proof.
         let proof = self.client.prove(&self.pk, &stdin).groth16().run()?;
 
-        info!("Attempting to update to new head block: {:?}", latest_block);
+        info!("Attempting to update to new head block: {:?}", latest_slot);
         Ok(Some(proof))
     }
 
@@ -292,7 +383,7 @@ impl SP1HeliosOperator {
 async fn main() -> Result<()> {
     env::set_var("RUST_LOG", "info");
     dotenv::dotenv().ok();
-    env_logger::init();
+    init_tracing().context("failed to set up tracing")?;
 
     let loop_delay_mins = env::var("LOOP_DELAY_MINS")
         .unwrap_or("5".to_string())

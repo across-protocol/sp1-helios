@@ -5,6 +5,10 @@ edition.workspace = true
 license.workspace = true
 authors.workspace = true
 
+[features]
+default = ["sp1-backend"]
+sp1-backend = []          # Add dependencies here if needed
+
 [[bin]]
 name = "genesis"
 path = "./bin/genesis.rs"
@@ -14,12 +18,20 @@ name = "operator"
 path = "./bin/operator.rs"
 
 [[bin]]
+name = "operator2"
+path = "./bin/operator2.rs"
+
+[[bin]]
 name = "test"
 path = "./bin/test.rs"
 
 [[bin]]
 name = "vkey"
 path = "./bin/vkey.rs"
+
+[[bin]]
+name = "play"
+path = "./bin/play.rs"
 
 [dependencies]
 dotenv = { workspace = true }
@@ -31,8 +43,6 @@ sp1-helios-primitives = { workspace = true }
 serde = { workspace = true }
 serde_cbor = { workspace = true }
 clap = { workspace = true }
-log = { workspace = true }
-env_logger = { workspace = true }
 alloy-primitives = { workspace = true }
 alloy = { workspace = true }
 anyhow = { workspace = true }
@@ -41,6 +51,20 @@ reqwest = { workspace = true }
 tree_hash = { workspace = true }
 serde_json = { workspace = true }
 alloy-trie = { workspace = true }
+alloy-rlp = { workspace = true }
+axum = "0.8.3"
+redis = { version = "0.26.0", features = ["tokio-comp", "connection-manager"] }
+thiserror = { workspace = true }
+utoipa = { version = "5.3.1", features = ["axum_extras"] }
+utoipa-swagger-ui = { version = "9.0.1", features = ["axum"] }
+utoipa-axum = "0.2.0"
+tokio-util = "0.7.14"
+async-trait = "0.1.88"
+eyre = "0.6.12"
+futures = "0.3.31"
+chrono = "0.4.40"
+tracing = "0.1.41"
+tracing-subscriber = "0.3.19"
 
 [build-dependencies]
 sp1-build = { workspace = true }
