@@ -4,7 +4,9 @@ use crate::{
     proof_backends::ProofBackend,
     redis_store::RedisStore,
     rpc_proxies::execution::{self},
-    types::{ProofId, ProofRequestState, ProofRequestStatus, ProofServiceError},
+    types::{
+        ContractStorageBuilder, ProofId, ProofRequestState, ProofRequestStatus, ProofServiceError,
+    },
     util::CancellationTokenGuard,
 };
 use alloy::transports::BoxFuture;
@@ -16,7 +18,7 @@ use helios_consensus_core::{
 };
 use helios_ethereum::rpc::{http_rpc::HttpRpc, ConsensusRpc};
 use serde::{de::DeserializeOwned, Serialize};
-use sp1_helios_primitives::types::{ContractStorage, ProofInputs, StorageSlot};
+use sp1_helios_primitives::types::ProofInputs;
 use tree_hash::TreeHash;
 
 use std::str::FromStr;
@@ -449,25 +451,14 @@ where
                 request.src_chain_contract_address,
                 &request.src_chain_storage_slots,
                 block_id,
+                *latest_finalized_execution_header.state_root(),
             )
             .await
             .context("Failed to get storage proof using execution provider proxy")
             .map_err(|e| anyhow!(e.to_string()))?;
 
-        if proof.storage_proof.len() != request.src_chain_storage_slots.len() {
-            return Err(anyhow!("Merkle proof length mismatch."));
-        }
-
-        let storage_slots: Vec<StorageSlot> = request
-            .src_chain_storage_slots
-            .iter()
-            .zip(proof.storage_proof.into_iter())
-            .map(|(&key, proof_item)| StorageSlot {
-                key,
-                expected_value: proof_item.value,
-                mpt_proof: proof_item.proof,
-            })
-            .collect();
+        let contract_storage =
+            ContractStorageBuilder::build(&request.src_chain_storage_slots, proof)?;
 
         let inputs = ProofInputs {
             sync_committee_updates: consensus_proof_inputs.sync_committee_updates,
@@ -476,17 +467,7 @@ where
             store: consensus_proof_inputs.initial_store,
             genesis_root: consensus_proof_inputs.config.chain.genesis_root,
             forks: consensus_proof_inputs.config.forks.clone(),
-            contract_storage_slots: ContractStorage {
-                address: proof.address,
-                expected_value: alloy_trie::TrieAccount {
-                    nonce: proof.nonce,
-                    balance: proof.balance,
-                    storage_root: proof.storage_hash,
-                    code_hash: proof.code_hash,
-                },
-                mpt_proof: proof.account_proof,
-                storage_slots,
-            },
+            contract_storage_slots: contract_storage,
         };
 
         Ok(inputs)
