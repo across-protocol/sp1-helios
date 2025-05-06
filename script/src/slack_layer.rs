@@ -1,5 +1,6 @@
 // slack_layer.rs
 use chrono::Local;
+use once_cell::sync::Lazy;
 use reqwest::Client;
 use serde::Serialize;
 use tokio::task;
@@ -7,6 +8,14 @@ use tracing::field::Field;
 use tracing::{field::Visit, Event, Level, Subscriber};
 use tracing_subscriber::layer::{Context, Layer};
 use tracing_subscriber::registry::LookupSpan;
+use uuid::Uuid;
+
+// Generate a unique run ID once
+static RUN_ID: Lazy<String> = Lazy::new(|| {
+    let full_uuid = Uuid::new_v4().to_string();
+    // Take the first 6 hex characters
+    full_uuid.chars().take(6).collect()
+});
 
 #[derive(Serialize)]
 struct SlackPayload {
@@ -116,13 +125,13 @@ where
 
         let final_text = if message.is_empty() {
             format!(
-                "`{} [{:<5}]` {} `[{}]` Event occurred (no message field)",
-                ts, level, level_emoji, display_target
+                "`[{}] [{:<5}]` {} `[{}::{}]` Event occurred (no message field)",
+                ts, level, level_emoji, *RUN_ID, display_target
             )
         } else {
             format!(
-                "`{} [{:<5}]` {} `[{}]` {}",
-                ts, level, level_emoji, display_target, message
+                "`[{}] [{:<5}]` {} `[{}::{}]` {}",
+                ts, level, level_emoji, *RUN_ID, display_target, message
             )
         };
 

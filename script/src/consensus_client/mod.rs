@@ -413,7 +413,7 @@ impl<S: ConsensusSpec, R: ConsensusRpc<S> + std::fmt::Debug> Client<S, R> {
                 Err(e) => {
                     warn!(
                         target: "consensus_client::sync_to_chain",
-                        "sync errored for RPC {}", e
+                        "sync errored for RPC {:#?}", e
                     );
                 }
             }

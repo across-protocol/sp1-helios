@@ -17,7 +17,7 @@ async fn main() -> anyhow::Result<()> {
     let _api_task_handle = start_api_server(proof_service.clone()).await;
 
     if let Err(e) = sp1_helios_script::proof_service::run(proof_service).await {
-        error!("Error running proof service: {}", e);
+        error!("Error running proof service: {:#?}", e);
         return Err(e);
     }
 

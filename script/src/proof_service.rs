@@ -200,7 +200,7 @@ where
                     // Error acquiring lock
                     warn!(
                         target: "proof_service::api",
-                        "Failed to acquire lock for proof generation ID: {}: {}", proof_id.to_hex_string(), e
+                        "Failed to acquire lock for proof generation ID: {}: {:#?}", proof_id.to_hex_string(), e
                     );
                 }
             }
@@ -324,7 +324,7 @@ where
                         // Redis returned an error while trying to acquire lock
                         warn!(
                             target: "proof_service::state",
-                            "Failed to acquire lock for proof generation spawn ID: {}: {}",
+                            "Failed to acquire lock for proof generation spawn ID: {}: {:#?}",
                             proof_id.to_hex_string(),
                             e
                         );
@@ -354,8 +354,8 @@ where
                 info!(target: "proof_service::init", "Finalized header not found in Redis. Falling back to env var.");
             }
             Err(e) => {
-                warn!(target: "proof_service::init", "Error reading finalized header from Redis: {}. Falling back to env var.", e);
-                return Err(anyhow!("{}", e));
+                warn!(target: "proof_service::init", "Error reading finalized header from Redis: {:#?}. Falling back to env var.", e);
+                return Err(anyhow!("{:#?}", e));
             }
         }
 
@@ -411,15 +411,15 @@ where
                     attempt += 1;
                     let proof_id_hex = ProofId::new(request).to_hex_string();
                     if attempt >= MAX_GET_PROOF_INPUTS_ATTEMPTS {
-                        warn!(target: "proof_service::proof_inputs", "All {} attempts exhausted for proof id {}. Last error: {}", MAX_GET_PROOF_INPUTS_ATTEMPTS, proof_id_hex, e);
+                        warn!(target: "proof_service::proof_inputs", "All {} attempts exhausted for proof id {}. Last error: {:#?}", MAX_GET_PROOF_INPUTS_ATTEMPTS, proof_id_hex, e);
                         return Err(anyhow!(
-                            "Failed to get proof inputs after {} attempts for proof id {}: {}",
+                            "Failed to get proof inputs after {} attempts for proof id {}: {:#?}",
                             MAX_GET_PROOF_INPUTS_ATTEMPTS,
                             proof_id_hex,
                             e
                         ));
                     } else {
-                        warn!(target: "proof_service::proof_inputs", "Attempt {} failed for proof id {}: {}. Retrying in 12s...", attempt, proof_id_hex, e);
+                        warn!(target: "proof_service::proof_inputs", "Attempt {} failed for proof id {}: {:#?}. Retrying in 12s...", attempt, proof_id_hex, e);
                         tokio::time::sleep(Duration::from_secs(12)).await;
                     }
                 }
@@ -537,7 +537,7 @@ where
                                 break;
                             }
                             Err(e) => {
-                                warn!(target: "proof_service::generate", "[ProofID: {}] Error extending worker lock: {}. Releasing lock.", proof_id.to_hex_string(), e);
+                                warn!(target: "proof_service::generate", "[ProofID: {}] Error extending worker lock: {:#?}. Releasing lock.", proof_id.to_hex_string(), e);
                                 // Release lock on error to prevent dangling locks
                                 redis_store_clone.release_proof_generation_lock(&proof_id).await;
                                 break; // Stop trying on error
@@ -572,9 +572,9 @@ where
             Err(e) => {
                 warn!(
                     target: "proof_service::generate",
-                    "[ProofID: {}] Error generating proof: {}",
+                    "[ProofID: {}] Error generating proof: {:#?}",
                     proof_id.to_hex_string(),
-                    e.to_string()
+                    e
                 );
                 let mut proof_state = ProofRequestState::new(request.clone());
                 proof_state.status = ProofRequestStatus::Errored;
@@ -600,7 +600,7 @@ where
                     retry_count += 1;
                     warn!(
                         target: "proof_service::generate",
-                        "[ProofID: {}] Failed to store proof state in Redis (attempt {}): {}. Retrying in 1s...",
+                        "[ProofID: {}] Failed to store proof state in Redis (attempt {}): {:#?}. Retrying in 1s...",
                         proof_id.to_hex_string(),
                         retry_count,
                         e
@@ -686,7 +686,7 @@ where
                 }
                 Err(e) => {
                     // Error trying to acquire the lock.
-                    error!(target: "proof_service::pickup", "Failed to check/acquire lock for proof ID {}: {}. Skipping pickup.", proof_id.to_hex_string(), e);
+                    error!(target: "proof_service::pickup", "Failed to check/acquire lock for proof ID {}: {:#?}. Skipping pickup.", proof_id.to_hex_string(), e);
                 }
             }
         }
@@ -729,7 +729,7 @@ where
 
         // Periodically check for and pick up orphaned proof generation tasks
         if let Err(e) = proof_service.restart_orphaned_proofs().await {
-            warn!(target: "proof_service::run", "Error during orphaned proof pickup check: {}", e);
+            warn!(target: "proof_service::run", "Error during orphaned proof pickup check: {:#?}", e);
         }
 
         // Periodically check that the finalized header stored in redis is no older than allowed MAX_FINALIZED_HEADER_AGE
@@ -799,7 +799,7 @@ async fn update_redis_state<B>(
             }
         }
         Err(e) => {
-            warn!(target: "proof_service::run", "Failed to advance Redis state for finalized header slot {}. Error: {}", finalized_header.beacon().slot, e);
+            warn!(target: "proof_service::run", "Failed to advance Redis state for finalized header slot {}. Error: {:#?}", finalized_header.beacon().slot, e);
         }
     }
 }
@@ -812,7 +812,7 @@ async fn advance_light_client<S: ConsensusSpec, R: ConsensusRpc<S> + std::fmt::D
     let prev_finalized_slot = light_client.store.finalized_header.beacon().slot;
     let res = light_client.advance().await;
     if let Err(err) = res {
-        warn!(target: "proof_service::run", "Helios light client advance error: {}", err);
+        warn!(target: "proof_service::run", "Helios light client advance error: {:#?}", err);
         return;
     }
     let new_finalized_slot = light_client.store.finalized_header.beacon().slot;
@@ -863,7 +863,7 @@ where
         }
         Err(err) => {
             // Some redis error, will try again next cycle
-            warn!(target: "proof_service::header_check", "error checking stored header age: {}", err);
+            warn!(target: "proof_service::header_check", "error checking stored header age: {:#?}", err);
             // return Ok, consider this error non-critical, i.e. can be recovered from
             Ok(())
         }
