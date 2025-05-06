@@ -14,6 +14,8 @@ use std::{env, time::Duration};
 use tokio::time::timeout;
 use tracing::warn;
 
+use crate::{types::ContractStorageBuilder, verify_storage_slot_proofs};
+
 use super::multiplex;
 
 #[derive(Clone)]
@@ -72,15 +74,17 @@ impl Proxy {
     pub async fn get_proof(
         &self,
         address: Address,
-        keys: &[B256],
-        // todo? We don't have to require block_id like that. It's easiest for now. `Option<BlockId>`
+        storage_slot_keys: &[B256],
         block_id: BlockId,
+        state_root: B256,
     ) -> Result<EIP1186AccountProofResponse> {
         let proof = multiplex(
             |client| {
-                let keys = keys.to_owned();
-                (async move { Self::get_proof_and_check(client, address, keys, block_id).await })
-                    .boxed()
+                let keys = storage_slot_keys.to_owned();
+                (async move {
+                    Self::get_proof_and_check(client, address, keys, block_id, state_root).await
+                })
+                .boxed()
             },
             &self.providers,
         )
@@ -88,28 +92,30 @@ impl Proxy {
         Ok(proof)
     }
 
-    /// Requests Merkle proof from execution client. Times out if it rpc call takes longer than 5 seconds
-    // todo? add retries to this. We're using multiple trustworthy RPCs in prod, so at least one should retrun a fine result
+    /// Requests Merkle proof from execution client. Times out if it rpc call takes longer than 4 seconds
+    // todo? consider adding retries with exp. backoff.
     async fn get_proof_and_check(
         client: RootProvider<Http<Client>>,
         address: Address,
         keys: Vec<B256>,
         block_id: BlockId,
+        state_root: B256,
     ) -> Result<EIP1186AccountProofResponse> {
         let proof = timeout(
             Duration::from_secs(4),
-            client.get_proof(address, keys).block_id(block_id),
+            client.get_proof(address, keys.clone()).block_id(block_id),
         )
         .await;
 
         match proof {
-            /*
-            todo: check Merkle proof locally here. If errors, return error; if suceeds, return Ok(proof).
-            Practically, we're using only trusworthy execution RPCs, so this call may not be as important.
-             */
-            Ok(Ok(proof)) => Ok(proof),
-            Ok(Err(e)) => Err(anyhow!("rpc error: {e}")),
-            Err(e) => Err(anyhow!("rpc call timed out after {e}")),
+            Ok(Ok(proof)) => {
+                // verify Merkle proof response from this RPC before returning Ok()
+                let contract_storage = ContractStorageBuilder::build(&keys, proof.clone())?;
+                _ = verify_storage_slot_proofs(state_root, contract_storage)?;
+                Ok(proof)
+            }
+            Ok(Err(e)) => Err(anyhow!("rpc error: {:#?}", e)),
+            Err(e) => Err(anyhow!("rpc call timed out after {:#?}", e)),
         }
     }
 }

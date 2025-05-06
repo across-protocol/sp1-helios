@@ -1,4 +1,8 @@
-use alloy_primitives::B256;
+use alloy::hex;
+use alloy_primitives::{keccak256, Bytes, FixedBytes, B256};
+use alloy_rlp::Encodable;
+use alloy_trie::{proof, Nibbles};
+use anyhow::anyhow;
 use helios_consensus_core::{
     calc_sync_period,
     consensus_spec::{ConsensusSpec, MainnetConsensusSpec},
@@ -10,12 +14,13 @@ use helios_ethereum::{
 };
 use helios_ethereum::{consensus::ConsensusClient, database::ConfigDB, rpc::ConsensusRpc};
 use rpc_proxies::consensus::ConsensusRpcProxy;
+use sp1_helios_primitives::types::{ContractStorage, VerifiedStorageSlot};
 use tracing::info;
 use tracing_subscriber::{fmt, layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
+use tree_hash::TreeHash;
 
 use std::sync::Arc;
 use tokio::sync::{mpsc::channel, watch};
-use tree_hash::TreeHash;
 pub mod api;
 pub mod consensus_client;
 pub mod proof_backends;
@@ -243,10 +248,14 @@ pub fn init_tracing() -> anyhow::Result<()> {
     Ok(())
 }
 
+/**
+ * @dev this function is copied over from `program/src/main.rs` and used to mimic the Merkle tree proof part of the ZK program
+ * It is used to confirm the validity of the Merkle proof we receive from execution RPCs. This function is modified to return an error instaed of panicking
+ */
 pub fn verify_storage_slot_proofs(
     execution_state_root: FixedBytes<32>,
     contract_storage: ContractStorage,
-) -> Vec<VerifiedStorageSlot> {
+) -> anyhow::Result<Vec<VerifiedStorageSlot>> {
     // Convert the contract address into nibbles for the global MPT proof
     // We need to keccak256 the address before converting to nibbles for the MPT proof
     let address_hash = keccak256(contract_storage.address.as_slice());
@@ -265,11 +274,11 @@ pub fn verify_storage_slot_proofs(
         Some(rlp_encoded_trie_account),
         &contract_storage.mpt_proof,
     ) {
-        panic!(
-            "Could not verify the contract's `TrieAccount` in the global MPT for address {}: {}",
+        return Err(anyhow!(
+            "Could not verify the contract's `TrieAccount` in the global MPT for address {}: {:#?}",
             hex::encode(contract_storage.address),
             e
-        );
+        ));
     }
 
     // 2) Now that we've verified the contract's `TrieAccount`, use it to verify each storage slot proof
@@ -291,7 +300,11 @@ pub fn verify_storage_slot_proofs(
             Some(rlp_encoded_value),
             &slot.mpt_proof,
         ) {
-            panic!("Storage proof invalid for slot {}: {}", hex::encode(key), e);
+            return Err(anyhow!(
+                "Storage proof invalid for slot {}: {:#?}",
+                hex::encode(key),
+                e
+            ));
         }
 
         verified_slots.push(VerifiedStorageSlot {
@@ -301,5 +314,5 @@ pub fn verify_storage_slot_proofs(
         });
     }
 
-    verified_slots
+    Ok(verified_slots)
 }
