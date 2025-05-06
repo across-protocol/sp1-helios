@@ -162,7 +162,7 @@ impl IntoResponse for ProofServiceError {
     fn into_response(self) -> Response {
         let (status, error_message) = match self {
             ProofServiceError::RedisError(e) => {
-                error!("Redis error: {}", e);
+                error!("Redis error: {:#?}", e);
                 (
                     StatusCode::INTERNAL_SERVER_ERROR,
                     format!("Redis error: {}", e),
@@ -180,7 +180,7 @@ impl IntoResponse for ProofServiceError {
                 format!("Proof request {} not found", id.to_hex_string()),
             ),
             ProofServiceError::SerializationError(e) => {
-                error!("Serialization error: {}", e);
+                error!("Serialization error: {:#?}", e);
                 (
                     StatusCode::INTERNAL_SERVER_ERROR,
                     format!("Serialization error: {}", e),
@@ -394,7 +394,7 @@ where
         serve(listener, app.into_make_service())
             .await
             .unwrap_or_else(|e| {
-                error!("API server error: {}", e);
+                error!("API server error: {:#?}", e);
             });
     })
 }

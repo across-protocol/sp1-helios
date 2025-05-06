@@ -201,7 +201,7 @@ where
                                 // Log deserialization error but continue processing other keys
                                 warn!(
                                     target: "redis_store",
-                                    "Failed to deserialize proof request state from Redis key {}: {}",
+                                    "Failed to deserialize proof request state from Redis key {}: {:#?}",
                                     proof_state_keys[i],
                                     e
                                 );

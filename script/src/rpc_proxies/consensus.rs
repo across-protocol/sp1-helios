@@ -83,7 +83,7 @@ impl<S: ConsensusSpec> ConsensusRpc<S> for ConsensusRpcProxy {
         {
             Ok(result) => return Ok(result),
             Err(err) => {
-                warn!(target: "proxy::bootstrap", "main rpc failed trying backups {}", err);
+                warn!(target: "proxy::bootstrap", "main rpc failed trying backups {:#?}", err);
             }
         };
 
@@ -194,7 +194,7 @@ impl<S: ConsensusSpec> ConsensusRpc<S> for ConsensusRpcProxy {
             Err(err) => {
                 warn!(
                     target: "proxy::optimistic",
-                    "main rpc failed; falling back to backups for optimistic update: {}", err
+                    "main rpc failed; falling back to backups for optimistic update: {:#?}", err
                 );
             }
         }
@@ -228,7 +228,7 @@ impl<S: ConsensusSpec> ConsensusRpc<S> for ConsensusRpcProxy {
             Err(err) => {
                 warn!(
                     target: "proxy::block",
-                    "main rpc failed; falling back to backups for block at slot {}: {}", slot, err
+                    "main rpc failed; falling back to backups for block at slot {}: {:#?}", slot, err
                 );
             }
         }
@@ -262,7 +262,7 @@ impl<S: ConsensusSpec> ConsensusRpc<S> for ConsensusRpcProxy {
             Err(err) => {
                 warn!(
                     target: "proxy::chain_id",
-                    "main rpc failed; falling back to backups for chain_id: {}", err
+                    "main rpc failed; falling back to backups for chain_id: {:#?}", err
                 );
             }
         }

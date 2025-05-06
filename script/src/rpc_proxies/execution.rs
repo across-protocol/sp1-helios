@@ -9,10 +9,10 @@ use alloy_primitives::{Address, B256};
 use anyhow::anyhow;
 use anyhow::{Context, Result};
 use futures::future::FutureExt;
-use tracing::warn;
 use reqwest::{Client, Url};
 use std::{env, time::Duration};
 use tokio::time::timeout;
+use tracing::warn;
 
 use super::multiplex;
 
@@ -47,14 +47,14 @@ impl Proxy {
                         Err(e) => {
                             warn!(
                                 target: "Proxy::from_env",
-                                "Skipping invalid URL '{}': {}", url_str, e
+                                "Skipping invalid URL '{}': {:#?}", url_str, e
                             );
                         }
                     }
                 }
             }
             Err(e) => {
-                warn!(target: "Proxy::from_env", "Failed to read execution URLs: {}", e);
+                warn!(target: "Proxy::from_env", "Failed to read execution URLs: {:#?}", e);
             }
         }
 

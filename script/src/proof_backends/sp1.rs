@@ -6,10 +6,10 @@ use crate::{
 use alloy_primitives::hex;
 use anyhow::{anyhow, Context, Result};
 use async_trait::async_trait;
-use tracing::{debug, info, warn};
 use sp1_helios_primitives::types::ProofInputs;
 use sp1_sdk::{EnvProver, ProverClient, SP1ProofWithPublicValues, SP1ProvingKey, SP1Stdin};
 use std::sync::Arc;
+use tracing::{debug, info, warn};
 
 use super::ProofBackend;
 
@@ -72,12 +72,12 @@ impl SP1Backend {
                 Ok(proof)
             }
             Ok(Err(prover_err)) => {
-                warn!(target: "sp1_backend::prove", "SP1 prover failed: {}", prover_err);
-                Err(anyhow!("SP1 prover failed: {}", prover_err))
+                warn!(target: "sp1_backend::prove", "SP1 prover failed: {:#?}", prover_err);
+                Err(anyhow!("SP1 prover failed: {:#?}", prover_err))
             }
             Err(join_err) => {
-                warn!(target: "sp1_backend::prove", "Spawned prover task failed: {}", join_err);
-                Err(anyhow!("Spawned prover task failed: {}", join_err))
+                warn!(target: "sp1_backend::prove", "Spawned prover task failed: {:#?}", join_err);
+                Err(anyhow!("Spawned prover task failed: {:#?}", join_err))
             }
         }
     }
