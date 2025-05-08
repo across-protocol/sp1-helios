@@ -1,13 +1,13 @@
 {
-  "executionStateRoot": "0x5b6761ad80cd7706f28ec1511cef30fe5644eda4cb4aaca6be33db387476bdc4",
+  "executionStateRoot": "0x3dd9b7c0f1d14a752018e47f5c9aebf101dd413e19d4ed21740d745ff7102d79",
   "genesisTime": 1606824023,
-  "head": 11617248,
-  "header": "0x04590c3fec7d4df8adc4ce8e52ebe08496dd28c2e97069c792c37005fa83491f",
-  "heliosProgramVkey": "0x00cdd2f9ea666180f64bec2dfc2c17c6330ef0d5545e975600a9c1ad73d8e7bd",
+  "head": 11653888,
+  "header": "0x6c3498933bed4b70f1fd70a425022b02bb3dc56c61bcfbf955d48481d5f1a47c",
+  "heliosProgramVkey": "0x0084f170bc94a2d4460a7a73e61d4d7b2c8bed837a9ffeb046d56ffdc8a0d760",
   "secondsPerSlot": 12,
   "slotsPerEpoch": 32,
   "slotsPerPeriod": 8192,
-  "syncCommitteeHash": "0xc5ac5e2859b8428d323100a69f8a3985d892ed37ae5241c07e2b8059d8261902",
+  "syncCommitteeHash": "0x02e2764784ce09de80c2bb7c82c708447302c444cf36844abb85ee3cb6b0cb6e",
   "verifier": "0x940467b232cad6a44ff36f2fbbe98cbd6509eff2",
   "updaters": [
     "0x9A8f92a830A5cB89a3816e3D267CB7791c16b04D",
