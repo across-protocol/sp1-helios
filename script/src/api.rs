@@ -23,7 +23,7 @@ use tokio::net::TcpListener;
 use tokio::task::JoinHandle;
 use tracing::{error, info};
 use utoipa::{OpenApi, ToSchema};
-use utoipa_swagger_ui::{SwaggerUi, Url};
+use utoipa_swagger_ui::{Config, SwaggerUi, Url};
 
 /// Status of a proof generation request
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, ToSchema)]
@@ -153,20 +153,23 @@ pub struct FinalizedHeaderResponse {
 
 #[derive(OpenApi)]
 #[openapi(
-    paths(health_handler, request_proof_handler, get_proof_handler, get_finalized_header_handler),
+    paths(
+        health_handler,
+        request_proof_handler,
+        get_proof_handler,
+        get_finalized_header_handler
+    ),
     components(
         schemas(
             ApiProofRequest,
             ProofStatusResponse,
             ProofRequestResponse,
             FinalizedHeaderResponse,
-            // list all appropriate ProofStateResponse variants as we add new proof backends.
             ProofStateResponse<SP1HeliosProofData>
         )
     ),
-    tags(
-        (name = "helios-proof-service", description = "Helios Proof Service API")
-    )
+    tags( (name = "helios-proof-service", description = "Helios Proof Service API") ),
+    servers( (url = "/v1") )
 )]
 pub struct ApiDocV1;
 
