@@ -102,7 +102,7 @@ pub async fn try_get_checkpoint(slot: u64) -> anyhow::Result<B256> {
 
     let config = Config {
         consensus_rpc: String::new(), // don't think it's used
-        execution_rpc: String::new(),
+        execution_rpc: None,
         chain: base_config.chain,
         forks: base_config.forks,
         strict_checkpoint_age: false,
@@ -150,7 +150,7 @@ pub async fn try_get_client<S: ConsensusSpec, R: ConsensusRpc<S>>(
 
     let config = Config {
         consensus_rpc: String::new(), // I don't think it's used
-        execution_rpc: String::new(),
+        execution_rpc: None,
         chain: base_config.chain,
         forks: base_config.forks,
         strict_checkpoint_age: false,
@@ -189,7 +189,7 @@ pub async fn create_streaming_client(
 
     let config = Config {
         consensus_rpc: consensus_rpc.to_string(),
-        execution_rpc: String::new(),
+        execution_rpc: None,
         chain: base_config.chain,
         forks: base_config.forks,
         checkpoint: Some(checkpoint),
