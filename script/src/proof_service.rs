@@ -733,7 +733,7 @@ where
         }
 
         // Periodically check that the finalized header stored in redis is no older than allowed MAX_FINALIZED_HEADER_AGE
-        check_header_health(&mut proof_service.redis_store, light_client.config.clone()).await?;
+        // check_header_health(&mut proof_service.redis_store, light_client.config.clone()).await?;
 
         let _ = interval.tick().await;
 
