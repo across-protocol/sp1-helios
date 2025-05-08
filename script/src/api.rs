@@ -23,7 +23,7 @@ use tokio::net::TcpListener;
 use tokio::task::JoinHandle;
 use tracing::{error, info};
 use utoipa::{OpenApi, ToSchema};
-use utoipa_swagger_ui::SwaggerUi;
+use utoipa_swagger_ui::{SwaggerUi, Url};
 
 /// Status of a proof generation request
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, ToSchema)]
@@ -168,7 +168,7 @@ pub struct FinalizedHeaderResponse {
         (name = "helios-proof-service", description = "Helios Proof Service API")
     )
 )]
-pub struct ApiDoc;
+pub struct ApiDocV1;
 
 // --- API Handlers & Router ---
 
@@ -368,13 +368,21 @@ fn create_api_router<B>(proof_service: ProofService<B>) -> Router
 where
     B: ProofBackend + Clone + Send + Sync + 'static,
 {
-    Router::new()
+    let v1_router = Router::new()
         .route("/health", get(health_handler))
-        .route("/api/proofs", post(request_proof_handler))
+        .route("/api/proofs", post(request_proof_handler::<B>))
         .route("/api/proofs/{id}", get(get_proof_handler))
-        .route("/api/finalized-header", get(get_finalized_header_handler))
-        .merge(SwaggerUi::new("/swagger-ui").url("/api-docs/openapi.json", ApiDoc::openapi()))
-        .with_state(proof_service)
+        .route("/api/finalized-header", get(get_finalized_header_handler));
+
+    // Serve v1 as primary API, add next versions to this vec! as needed
+    let swagger = SwaggerUi::new("/").urls(vec![(
+        Url::with_primary("v1", "/v1/api-docs/openapi.json", true),
+        ApiDocV1::openapi(),
+    )]);
+
+    Router::new()
+        .nest("/v1", v1_router.with_state(proof_service.clone()))
+        .merge(swagger)
 }
 
 /// Start the API server
