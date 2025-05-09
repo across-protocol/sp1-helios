@@ -69,6 +69,18 @@ pub async fn get_proof_inputs<S: ConsensusSpec>(
 
     let trace = client.sync_to_chain().await?;
 
+    // ZK program requires that the head(slot) advance at least once. If it didn't, return error and
+    // let caller try again
+    let initial_slot = initial_store.finalized_header.beacon().slot;
+    let new_slot = client.store.finalized_header.beacon().slot;
+    if new_slot <= initial_slot {
+        return Err(anyhow!(
+            "finalized head did not advance. Initial head: {} , finalized head: {}",
+            initial_slot,
+            new_slot
+        ));
+    }
+
     let execution_block_number = *client
         .store
         .finalized_header
@@ -205,22 +217,22 @@ impl<S: ConsensusSpec, R: ConsensusRpc<S> + std::fmt::Debug> Client<S, R> {
         Ok(())
     }
 
+    // bootstrap is a heavy call, use a 12-sec timeout for it
+    const BOOTSTRAP_TIMEOUT_SECS: u64 = 12;
     pub async fn bootstrap(&mut self, checkpoint: B256) -> Result<()> {
         let mut futs = vec![];
         for rpc in &self.rpcs {
-            // Clone store and launch a future for each rpc that will try to advance it. In the end,
-            // we'll compare results from each rpc to see which one advanced store the most and take
-            // that one
             let mut store = self.store.clone();
             let config = self.config.clone();
+            // Create a future for every RPC that will try to bootstrap on the provided checkpoint
             let fut: std::pin::Pin<Box<dyn Future<Output = Result<LightClientStore<S>>> + Send>> = async move {
-                match timeout(std::time::Duration::from_secs(12), async {
+                match timeout(std::time::Duration::from_secs(Self::BOOTSTRAP_TIMEOUT_SECS), async {
                     let bootstrap = rpc
                         .get_bootstrap(checkpoint)
                         .await
-                        .map_err(|e| anyhow::anyhow!("RPC error getting bootstrap: {}", e))?;
+                        .map_err(|e| anyhow::anyhow!("RPC error getting bootstrap: {:#?}", e))?;
 
-                    // Notice: only checks checkpoint's age at this point
+                    // @notice `is_valid_checkpoint` only checks slot's age
                     let is_valid = config.is_valid_checkpoint(bootstrap.header().beacon().slot);
 
                     if !is_valid {
@@ -245,7 +257,8 @@ impl<S: ConsensusSpec, R: ConsensusRpc<S> + std::fmt::Debug> Client<S, R> {
             futs.push(fut);
         }
 
-        // any of the available non-errored stores is good, because they're all checked against a checkpoint
+        // Take first non-erroring result. Each fut checks the integrity of bootstrap and therefore
+        // resulting `LightClientStore`. So take the fastest completing one here
         let validated_store = select_ok(futs).await;
         match validated_store {
             Ok((store, futs)) => {
@@ -259,6 +272,7 @@ impl<S: ConsensusSpec, R: ConsensusRpc<S> + std::fmt::Debug> Client<S, R> {
         }
     }
 
+    const ADVANCE_TIMEOUT_SECS: u64 = 4;
     pub async fn advance(&mut self) -> Result<()> {
         debug!(
             target: "consensus_client::advance",
@@ -269,9 +283,10 @@ impl<S: ConsensusSpec, R: ConsensusRpc<S> + std::fmt::Debug> Client<S, R> {
             let store = self.store.clone();
             let config = self.config.clone();
             async move {
-                match timeout(std::time::Duration::from_secs(4), async move {
-                    Self::advance_single_rpc(store, config, rpc).await
-                })
+                match timeout(
+                    std::time::Duration::from_secs(Self::ADVANCE_TIMEOUT_SECS),
+                    async move { Self::advance_single_rpc(store, config, rpc).await },
+                )
                 .await
                 {
                     Ok(Ok(res)) => Ok(res),
@@ -370,14 +385,16 @@ impl<S: ConsensusSpec, R: ConsensusRpc<S> + std::fmt::Debug> Client<S, R> {
         Ok((store, last_checkpoint))
     }
 
+    const SYNC_TO_CHAIN_TIMEOUT_SECS: u64 = 12;
     async fn sync_to_chain(&mut self) -> Result<SyncToChainTrace<S>> {
         let futs = self.rpcs.iter().map(|rpc| {
             let store = self.store.clone();
             let config = self.config.clone();
             async move {
-                match timeout(std::time::Duration::from_secs(12), async move {
-                    Self::sync_to_chain_single_rpc(store, config, rpc).await
-                })
+                match timeout(
+                    std::time::Duration::from_secs(Self::SYNC_TO_CHAIN_TIMEOUT_SECS),
+                    async move { Self::sync_to_chain_single_rpc(store, config, rpc).await },
+                )
                 .await
                 {
                     Ok(Ok(res)) => Ok(res),
@@ -387,27 +404,22 @@ impl<S: ConsensusSpec, R: ConsensusRpc<S> + std::fmt::Debug> Client<S, R> {
             }
         });
 
-        /*
-        ?todo
-        Currently, we're waiting for each rpc to try and complete this sync before looking at results.
-        We do this to see what latest finalized block we can get from each of the rpc, and take the latest one.
-        Might want to change this later somehow
-        */
+        // Wait for all RPCs to finish in order to pick the result that advances our chain view the most
         let results = join_all(futs).await;
         let mut candidate: Option<SyncToChainTrace<S>> = None;
         for result in results {
             match result {
-                Ok(trace) => {
-                    if let Some(ref curr_candidate_trace) = candidate {
+                Ok(result_trace) => {
+                    if let Some(ref candidate_trace) = candidate {
                         if compare_store_advancement(
-                            &trace.final_store,
-                            &curr_candidate_trace.final_store,
+                            &result_trace.final_store,
+                            &candidate_trace.final_store,
                         ) == Ordering::Greater
                         {
-                            candidate = Some(trace);
+                            candidate = Some(result_trace);
                         }
                     } else {
-                        candidate = Some(trace);
+                        candidate = Some(result_trace);
                     }
                 }
                 Err(e) => {

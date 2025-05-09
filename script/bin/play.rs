@@ -36,17 +36,5 @@ async fn main() -> anyhow::Result<()> {
         }
     }
 
-    /*
-    let slot: u64 = 11467072;
-    let checkpoint = get_checkpoint(slot).await;
-    info!("checkpoint from slot: {}", hex::encode(checkpoint));
-    // let checkpoint = b256!("0xa4c300c4ad14d5b6c507836be6989c25cd04d62fe1a21e2c62ea6b776406eed9");
-    let client = get_client(checkpoint).await;
-    info!(
-        "finalized slot from checkpoint: {}",
-        client.store.finalized_header.beacon().slot
-    );
-    */
-
     Ok(())
 }

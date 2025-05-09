@@ -20,6 +20,5 @@
     "script/Cargo.toml",
     "primitives/Cargo.toml"
   ],
-  "rust-analyzer.showUnlinkedFileNotification": false,
-  "rust-analyzer.cargo.features": ["sp1-backend"]
+  "rust-analyzer.showUnlinkedFileNotification": false
 }
