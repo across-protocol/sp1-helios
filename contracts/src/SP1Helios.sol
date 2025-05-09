@@ -10,7 +10,7 @@ import {AccessControlEnumerable} from "@openzeppelin/access/extensions/AccessCon
 /// The contract stores the latest verified beacon chain header, execution state root, and sync committee information.
 /// It also provides functionality to verify and store Ethereum storage slot values.
 /// Updater permissions are fixed at contract creation time and cannot be modified afterward.
-/// @custom:security-contact bugs@across.to 
+/// @custom:security-contact bugs@across.to
 contract SP1Helios is AccessControlEnumerable {
     /// @notice The timestamp at which the beacon chain genesis block was processed
     uint256 public immutable GENESIS_TIME;
@@ -163,21 +163,29 @@ contract SP1Helios is AccessControlEnumerable {
 
         uint256 fromHead = po.prevHead;
         // Ensure that po.newHead is strictly greater than po.prevHead
-        require (po.newHead > fromHead, NonIncreasingHead(po.newHead));
+        require(po.newHead > fromHead, NonIncreasingHead(po.newHead));
 
         bytes32 storedPrevHeader = headers[fromHead];
-        require (storedPrevHeader != bytes32(0), PreviousHeaderNotSet(fromHead));
-        require(storedPrevHeader == po.prevHeader, PreviousHeaderMismatch(po.prevHeader, storedPrevHeader));
+        require(storedPrevHeader != bytes32(0), PreviousHeaderNotSet(fromHead));
+        require(
+            storedPrevHeader == po.prevHeader,
+            PreviousHeaderMismatch(po.prevHeader, storedPrevHeader)
+        );
 
         // Check if the head being proved against is older than allowed.
-        require(block.timestamp - slotTimestamp(fromHead) <= MAX_SLOT_AGE, PreviousHeadTooOld(fromHead));
+        require(
+            block.timestamp - slotTimestamp(fromHead) <= MAX_SLOT_AGE, PreviousHeadTooOld(fromHead)
+        );
 
         uint256 currentPeriod = getSyncCommitteePeriod(fromHead);
 
         // Note: We should always have a sync committee for the current head.
         // The "start" sync committee hash is the hash of the sync committee that should sign the next update.
         bytes32 currentSyncCommitteeHash = syncCommittees[currentPeriod];
-        require(currentSyncCommitteeHash == po.startSyncCommitteeHash, SyncCommitteeStartMismatch(po.startSyncCommitteeHash, currentSyncCommitteeHash));
+        require(
+            currentSyncCommitteeHash == po.startSyncCommitteeHash,
+            SyncCommitteeStartMismatch(po.startSyncCommitteeHash, currentSyncCommitteeHash)
+        );
 
         // Verify the proof with the associated public values. This will revert if proof invalid.
         ISP1Verifier(verifier).verifyProof(heliosProgramVkey, publicValues, proof);
@@ -201,7 +209,7 @@ contract SP1Helios is AccessControlEnumerable {
         bytes32 storedExecutionRoot = executionStateRoots[po.newHead];
         if (storedExecutionRoot == bytes32(0)) {
             // Set new state root
-            executionStateRoots[po.newHead] = po.executionStateRoot;    
+            executionStateRoots[po.newHead] = po.executionStateRoot;
         } else if (storedExecutionRoot != po.executionStateRoot) {
             revert ExecutionStateRootMismatch(po.newHead);
         }
@@ -230,7 +238,9 @@ contract SP1Helios is AccessControlEnumerable {
 
             // If the next sync committee is already correct, we don't need to update it.
             if (syncCommittees[nextPeriod] != po.nextSyncCommitteeHash) {
-                require(syncCommittees[nextPeriod] == bytes32(0), SyncCommitteeAlreadySet(nextPeriod));
+                require(
+                    syncCommittees[nextPeriod] == bytes32(0), SyncCommitteeAlreadySet(nextPeriod)
+                );
 
                 syncCommittees[nextPeriod] = po.nextSyncCommitteeHash;
                 emit SyncCommitteeUpdate(nextPeriod, po.nextSyncCommitteeHash);
