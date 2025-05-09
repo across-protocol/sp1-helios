@@ -10,7 +10,7 @@ import {AccessControlEnumerable} from "@openzeppelin/access/extensions/AccessCon
 /// The contract stores the latest verified beacon chain header, execution state root, and sync committee information.
 /// It also provides functionality to verify and store Ethereum storage slot values.
 /// Updater permissions are fixed at contract creation time and cannot be modified afterward.
-/// @custom:security-contact bugs@across.to 
+/// @custom:security-contact bugs@across.to
 contract SP1Helios is AccessControlEnumerable {
     /// @notice The timestamp at which the beacon chain genesis block was processed
     uint256 public immutable GENESIS_TIME;
@@ -104,9 +104,7 @@ contract SP1Helios is AccessControlEnumerable {
     /// @param key The storage slot key within the contract.
     /// @param value The verified value of the storage slot.
     /// @param contractAddress The address of the contract whose storage slot was verified.
-    event StorageSlotVerified(
-        uint256 indexed head, bytes32 indexed key, bytes32 value, address contractAddress
-    );
+    event StorageSlotVerified(uint256 indexed head, bytes32 indexed key, bytes32 value, address contractAddress);
 
     /// @notice Emitted during contract initialization when an address is granted the immutable UPDATER_ROLE.
     /// @param updater The address granted the UPDATER_ROLE.
@@ -154,19 +152,16 @@ contract SP1Helios is AccessControlEnumerable {
     /// @dev Verifies an SP1 proof and updates the light client state based on the proof outputs
     /// @param proof The proof bytes for the SP1 proof
     /// @param publicValues The public commitments from the SP1 proof
-    function update(bytes calldata proof, bytes calldata publicValues)
-        external
-        onlyRole(UPDATER_ROLE)
-    {
+    function update(bytes calldata proof, bytes calldata publicValues) external onlyRole(UPDATER_ROLE) {
         // Parse the outputs from the committed public values associated with the proof.
         ProofOutputs memory po = abi.decode(publicValues, (ProofOutputs));
 
         uint256 fromHead = po.prevHead;
         // Ensure that po.newHead is strictly greater than po.prevHead
-        require (po.newHead > fromHead, NonIncreasingHead(po.newHead));
+        require(po.newHead > fromHead, NonIncreasingHead(po.newHead));
 
         bytes32 storedPrevHeader = headers[fromHead];
-        require (storedPrevHeader != bytes32(0), PreviousHeaderNotSet(fromHead));
+        require(storedPrevHeader != bytes32(0), PreviousHeaderNotSet(fromHead));
         require(storedPrevHeader == po.prevHeader, PreviousHeaderMismatch(po.prevHeader, storedPrevHeader));
 
         // Check if the head being proved against is older than allowed.
@@ -177,7 +172,10 @@ contract SP1Helios is AccessControlEnumerable {
         // Note: We should always have a sync committee for the current head.
         // The "start" sync committee hash is the hash of the sync committee that should sign the next update.
         bytes32 currentSyncCommitteeHash = syncCommittees[currentPeriod];
-        require(currentSyncCommitteeHash == po.startSyncCommitteeHash, SyncCommitteeStartMismatch(po.startSyncCommitteeHash, currentSyncCommitteeHash));
+        require(
+            currentSyncCommitteeHash == po.startSyncCommitteeHash,
+            SyncCommitteeStartMismatch(po.startSyncCommitteeHash, currentSyncCommitteeHash)
+        );
 
         // Verify the proof with the associated public values. This will revert if proof invalid.
         ISP1Verifier(verifier).verifyProof(heliosProgramVkey, publicValues, proof);
@@ -201,7 +199,7 @@ contract SP1Helios is AccessControlEnumerable {
         bytes32 storedExecutionRoot = executionStateRoots[po.newHead];
         if (storedExecutionRoot == bytes32(0)) {
             // Set new state root
-            executionStateRoots[po.newHead] = po.executionStateRoot;    
+            executionStateRoots[po.newHead] = po.executionStateRoot;
         } else if (storedExecutionRoot != po.executionStateRoot) {
             revert ExecutionStateRootMismatch(po.newHead);
         }
