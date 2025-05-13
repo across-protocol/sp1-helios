@@ -1,12 +1,9 @@
 use crate::api::ProofRequest;
-use alloy::rpc::types::EIP1186AccountProofResponse;
 use alloy_primitives::B256;
 use alloy_rlp::Encodable;
-use anyhow::anyhow;
-use serde::{de::DeserializeOwned, Deserialize, Serialize};
-use sp1_helios_primitives::types::{ContractStorage, StorageSlot};
-use thiserror::Error;
 use tracing::error;
+use serde::{de::DeserializeOwned, Deserialize, Serialize};
+use thiserror::Error;
 use utoipa::ToSchema;
 
 /// Unique identifier for a proof request, derived from the Keccak256 hash of its RLP-encoded content.
@@ -115,41 +112,4 @@ pub enum ProofServiceError {
     ProofGenerationFailed(ProofId, String),
     #[error("Internal service error: {0}")]
     Internal(String),
-}
-
-/**
- * @dev `ContractStorageBuilder` is a helper type to not add any implementations into `primitives/src/`, as that has been audited
- */
-pub struct ContractStorageBuilder;
-impl ContractStorageBuilder {
-    pub fn build(
-        storage_slots: &[B256],
-        proof: EIP1186AccountProofResponse,
-    ) -> anyhow::Result<ContractStorage> {
-        if proof.storage_proof.len() != storage_slots.len() {
-            return Err(anyhow!("Merkle proof length mismatch."));
-        }
-
-        let storage_slots: Vec<StorageSlot> = storage_slots
-            .iter()
-            .zip(proof.storage_proof)
-            .map(|(&key, proof_item)| StorageSlot {
-                key,
-                expected_value: proof_item.value,
-                mpt_proof: proof_item.proof,
-            })
-            .collect();
-
-        Ok(ContractStorage {
-            address: proof.address,
-            expected_value: alloy_trie::TrieAccount {
-                nonce: proof.nonce,
-                balance: proof.balance,
-                storage_root: proof.storage_hash,
-                code_hash: proof.code_hash,
-            },
-            mpt_proof: proof.account_proof,
-            storage_slots,
-        })
-    }
 }

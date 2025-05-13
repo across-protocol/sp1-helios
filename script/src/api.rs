@@ -23,7 +23,7 @@ use tokio::net::TcpListener;
 use tokio::task::JoinHandle;
 use tracing::{error, info};
 use utoipa::{OpenApi, ToSchema};
-use utoipa_swagger_ui::{Config, SwaggerUi, Url};
+use utoipa_swagger_ui::SwaggerUi;
 
 /// Status of a proof generation request
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, ToSchema)]
@@ -50,8 +50,8 @@ impl From<ProofRequestStatus> for ProofStatusResponse {
 pub struct ApiProofRequest {
     /// Contract address to prove a storage slot for (hex string with 0x prefix)
     pub src_chain_contract_address: String,
-    /// Storage slot keys to prove (list of hex strings with 0x prefix)
-    pub src_chain_storage_slots: Vec<String>,
+    /// Storage slot key to prove (hex string with 0x prefix)
+    pub src_chain_storage_slot: String,
     /// Minumum block number required for the storage to Be present (e.g. the block number of TX that set the storage slot above)
     pub src_chain_block_number: u64,
     /// A stored head on destination chain Helios contract
@@ -65,8 +65,8 @@ pub struct ApiProofRequest {
 pub struct ProofRequest {
     /// Contract address to prove a storage slot for
     pub src_chain_contract_address: Address,
-    /// Storage slot keys to prove
-    pub src_chain_storage_slots: Vec<B256>,
+    /// Storage slot key to prove
+    pub src_chain_storage_slot: B256,
     /// Minumum block number required for the storage to Be present (e.g. the block number of TX that set the storage slot above)
     pub src_chain_block_number: u64,
     /// A stored head on destination chain Helios contract
@@ -79,35 +79,20 @@ impl TryFrom<ApiProofRequest> for ProofRequest {
     type Error = ProofServiceError;
 
     fn try_from(req: ApiProofRequest) -> Result<Self, Self::Error> {
-        let src_chain_contract_address = Address::from_str(&req.src_chain_contract_address)
-            .map_err(|_| {
-                ProofServiceError::Internal("Invalid contract address format".to_string())
-            })?;
-
-        // Iterate over the input vector of strings, parse each to B256.
-        // collect() stops on the first error, otherwise collects into a Vec<B256>.
-        let src_chain_storage_slots: Vec<B256> = req
-            .src_chain_storage_slots
-            .iter()
-            .map(|s| {
-                B256::from_str(s).map_err(|_| {
-                    ProofServiceError::Internal("Invalid storage slot format".to_string())
-                })
-            })
-            .collect::<Result<Vec<_>, _>>()?;
-
-        let dst_chain_contract_from_header = B256::from_str(&req.dst_chain_contract_from_header)
-            .map_err(|_| {
-                // Use a more specific error message for the header
-                ProofServiceError::Internal("Invalid header format".to_string())
-            })?;
-
         Ok(ProofRequest {
-            src_chain_contract_address,
-            src_chain_storage_slots,
+            src_chain_contract_address: Address::from_str(&req.src_chain_contract_address)
+                .map_err(|_| {
+                    ProofServiceError::Internal("Invalid contract address format".to_string())
+                })?,
+            src_chain_storage_slot: B256::from_str(&req.src_chain_storage_slot).map_err(|_| {
+                ProofServiceError::Internal("Invalid storage slot format".to_string())
+            })?,
             src_chain_block_number: req.src_chain_block_number,
             dst_chain_contract_from_head: req.dst_chain_contract_from_head,
-            dst_chain_contract_from_header,
+            dst_chain_contract_from_header: B256::from_str(&req.dst_chain_contract_from_header)
+                .map_err(|_| {
+                    ProofServiceError::Internal("Invalid storage slot format".to_string())
+                })?,
         })
     }
 }
@@ -153,25 +138,22 @@ pub struct FinalizedHeaderResponse {
 
 #[derive(OpenApi)]
 #[openapi(
-    paths(
-        health_handler,
-        request_proof_handler,
-        get_proof_handler,
-        get_finalized_header_handler
-    ),
+    paths(health_handler, request_proof_handler, get_proof_handler, get_finalized_header_handler),
     components(
         schemas(
             ApiProofRequest,
             ProofStatusResponse,
             ProofRequestResponse,
             FinalizedHeaderResponse,
+            // list all appropriate ProofStateResponse variants as we add new proof backends.
             ProofStateResponse<SP1HeliosProofData>
         )
     ),
-    tags( (name = "helios-proof-service", description = "Helios Proof Service API") ),
-    servers( (url = "/v1") )
+    tags(
+        (name = "helios-proof-service", description = "Helios Proof Service API")
+    )
 )]
-pub struct ApiDocV1;
+pub struct ApiDoc;
 
 // --- API Handlers & Router ---
 
@@ -371,21 +353,13 @@ fn create_api_router<B>(proof_service: ProofService<B>) -> Router
 where
     B: ProofBackend + Clone + Send + Sync + 'static,
 {
-    let v1_router = Router::new()
-        .route("/health", get(health_handler))
-        .route("/api/proofs", post(request_proof_handler::<B>))
-        .route("/api/proofs/{id}", get(get_proof_handler))
-        .route("/api/finalized-header", get(get_finalized_header_handler));
-
-    // Serve v1 as primary API, add next versions to this vec! as needed
-    let swagger = SwaggerUi::new("/").urls(vec![(
-        Url::with_primary("v1", "/v1/api-docs/openapi.json", true),
-        ApiDocV1::openapi(),
-    )]);
-
     Router::new()
-        .nest("/v1", v1_router.with_state(proof_service.clone()))
-        .merge(swagger)
+        .route("/health", get(health_handler))
+        .route("/api/proofs", post(request_proof_handler))
+        .route("/api/proofs/{id}", get(get_proof_handler))
+        .route("/api/finalized-header", get(get_finalized_header_handler))
+        .merge(SwaggerUi::new("/swagger-ui").url("/api-docs/openapi.json", ApiDoc::openapi()))
+        .with_state(proof_service)
 }
 
 /// Start the API server

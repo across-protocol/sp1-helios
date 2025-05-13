@@ -4,9 +4,7 @@ use crate::{
     proof_backends::ProofBackend,
     redis_store::RedisStore,
     rpc_proxies::execution::{self},
-    types::{
-        ContractStorageBuilder, ProofId, ProofRequestState, ProofRequestStatus, ProofServiceError,
-    },
+    types::{ProofId, ProofRequestState, ProofRequestStatus, ProofServiceError},
     util::CancellationTokenGuard,
 };
 use alloy::transports::BoxFuture;
@@ -18,7 +16,7 @@ use helios_consensus_core::{
 };
 use helios_ethereum::rpc::{http_rpc::HttpRpc, ConsensusRpc};
 use serde::{de::DeserializeOwned, Serialize};
-use sp1_helios_primitives::types::ProofInputs;
+use sp1_helios_primitives::types::{ContractStorage, ProofInputs, StorageSlot};
 use tree_hash::TreeHash;
 
 use std::str::FromStr;
@@ -442,23 +440,37 @@ where
             .map_err(|_| anyhow!("No execution header in finality update".to_string()))?;
 
         let block_id = (*latest_finalized_execution_header.block_number()).into();
-        debug!(target: "proof_service::input", "Fetching storage proof for address {} slot {:?} at block ID {:?}", request.src_chain_contract_address, request.src_chain_storage_slots, block_id);
+        debug!(target: "proof_service::input", "Fetching storage proof for address {} slot {} at block ID {:?}", request.src_chain_contract_address, request.src_chain_storage_slot, block_id);
 
         // Get execution part of ProofInputs
         let proof = self
             .execution_rpc_proxy
             .get_proof(
                 request.src_chain_contract_address,
-                &request.src_chain_storage_slots,
+                vec![request.src_chain_storage_slot],
                 block_id,
-                *latest_finalized_execution_header.state_root(),
             )
             .await
             .context("Failed to get storage proof using execution provider proxy")
             .map_err(|e| anyhow!(e.to_string()))?;
 
-        let contract_storage =
-            ContractStorageBuilder::build(&request.src_chain_storage_slots, proof)?;
+        // Assemble the ProofInputs struct
+        let storage_slot = StorageSlot {
+            key: request.src_chain_storage_slot,
+            expected_value: proof
+                .storage_proof
+                .first()
+                .context("Storage proof vector was empty")
+                .map_err(|e| anyhow!(e.to_string()))?
+                .value,
+            mpt_proof: proof
+                .storage_proof
+                .first()
+                .context("Storage proof vector was empty")
+                .map_err(|e| anyhow!(e.to_string()))?
+                .proof
+                .clone(),
+        };
 
         let inputs = ProofInputs {
             sync_committee_updates: consensus_proof_inputs.sync_committee_updates,
@@ -467,7 +479,17 @@ where
             store: consensus_proof_inputs.initial_store,
             genesis_root: consensus_proof_inputs.config.chain.genesis_root,
             forks: consensus_proof_inputs.config.forks.clone(),
-            contract_storage_slots: contract_storage,
+            contract_storage_slots: ContractStorage {
+                address: proof.address,
+                expected_value: alloy_trie::TrieAccount {
+                    nonce: proof.nonce,
+                    balance: proof.balance,
+                    storage_root: proof.storage_hash,
+                    code_hash: proof.code_hash,
+                },
+                mpt_proof: proof.account_proof,
+                storage_slots: vec![storage_slot],
+            },
         };
 
         Ok(inputs)
