@@ -14,8 +14,8 @@ name = "operator"
 path = "./bin/operator.rs"
 
 [[bin]]
-name = "operator2"
-path = "./bin/operator2.rs"
+name = "service"
+path = "./bin/service.rs"
 
 [[bin]]
 name = "test"

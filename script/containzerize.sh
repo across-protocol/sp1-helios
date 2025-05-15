@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# Script to containerize the operator2 application.
+# Script to containerize the service application.
 # Supports two modes:
 # 1. local: Builds an image for the host architecture, loads it locally,
 #           and provides a sample 'docker run' command.
@@ -24,7 +24,7 @@ set -e
 # Ensure pipelines return the status of the last command to exit non-zero.
 set -o pipefail
 
-echo "--- Operator2 Containerization Script ---"
+echo "--- service Containerization Script ---"
 echo "INFO: Executing from workspace root: $(pwd)"
 echo
 
@@ -52,7 +52,7 @@ else
 fi
 
 # --- Shared Configuration ---
-IMAGE_NAME="operator2"
+IMAGE_NAME="service"
 DOCKERFILE_PATH="script/Dockerfile"
 
 # --- Mode-Specific Logic ---
