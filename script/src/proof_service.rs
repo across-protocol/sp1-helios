@@ -454,8 +454,7 @@ where
                 *latest_finalized_execution_header.state_root(),
             )
             .await
-            .context("Failed to get storage proof using execution provider proxy")
-            .map_err(|e| anyhow!(e.to_string()))?;
+            .context("Failed to get storage proof using execution provider proxy")?;
 
         let contract_storage =
             ContractStorageBuilder::build(&request.src_chain_storage_slots, proof)?;
@@ -536,8 +535,8 @@ where
 
         let proof_output_result = match inputs {
             Ok(inputs) => proof_service.proof_backend.generate_proof(inputs).await,
-            // If inputs generation errored, just pass it along into proof generation error.
-            Err(e) => Err(anyhow!("{e}")),
+            // If inputs generation errored, just pass it along as proof generation error.
+            Err(e) => Err(e),
         };
 
         let updated_proof_state = match proof_output_result {
@@ -556,7 +555,7 @@ where
                 );
                 let mut proof_state = ProofRequestState::new(request.clone());
                 proof_state.status = ProofRequestStatus::Errored;
-                proof_state.error_message = Some(e.to_string());
+                proof_state.error_message = Some(format!("{:#?}", e));
                 proof_state
             }
         };
