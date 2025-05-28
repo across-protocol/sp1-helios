@@ -534,7 +534,34 @@ where
         }
 
         let proof_output_result = match inputs {
-            Ok(inputs) => proof_service.proof_backend.generate_proof(inputs).await,
+            Ok(inputs) => {
+                /*
+                TODO: Not sure this is a perfect place, nor a perfect implementation for this % 32 error
+                TODO: handling. It's the easiest fast solution. Let the caller re-request a bit later when
+                TODO: we have a *proper* finalized slot
+                 */
+                /*
+                It is important for a slot to be divisible by 32. To understand why, you need to understand
+                bootstrapping. When we get some slot to start a proof from, we first need to bootsrtap
+                a client to that *starting state* (see consensus_client::get_proof_inputs). For that, we
+                need that starting slot to be a *checkpoint*. It's only a checkpoint and stored long-term by
+                consensus nodes if it's divisible by 32. So if a finalizer bot (ZK API client) ever
+                updates a smart contract to have a non-divisible latest head, we might be unable to
+                generate further proofs to advance that contract because of this *checkpoint* constraint.
+                 */
+                let slot = inputs.finality_update.finalized_header().beacon().slot;
+                if slot % 32 == 0 {
+                    proof_service.proof_backend.generate_proof(inputs).await
+                } else {
+                    // Error here and let caller re-request this proof at a later time. In practice, this should almost never happen
+                    Err(anyhow!(
+                        "Finalized beacon chain slot {} is not divisible by 32. This could lead to an \
+                        accidental bricking of the SP1Helios contract. This problem is intermittent \
+                        and will go away at the next epoch most likely.",
+                        slot
+                    ))
+                }
+            }
             // If inputs generation errored, just pass it along as proof generation error.
             Err(e) => Err(e),
         };
