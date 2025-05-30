@@ -76,8 +76,11 @@ impl SP1Backend {
                 Err(anyhow!("SP1 prover failed: {:#?}", prover_err))
             }
             Err(join_err) => {
-                warn!(target: "sp1_backend::prove", "Spawned prover task failed: {:#?}", join_err);
-                Err(anyhow!("Spawned prover task failed: {:#?}", join_err))
+                warn!(target: "sp1_backend::prove", "SP1 prover thread panicked or was cancelled: {:#?}", join_err);
+                Err(anyhow!(
+                    "SP1 prover thread panicked or was cancelled: {:#?}",
+                    join_err
+                ))
             }
         }
     }
