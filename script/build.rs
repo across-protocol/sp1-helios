@@ -1,7 +1,6 @@
 use sp1_build::{build_program_with_args, BuildArgs};
 
 fn main() {
-    println!("cargo:warning=Custom ELF genration script is running!");
     build_program_with_args(
         "../program",
         BuildArgs {
