@@ -23,7 +23,7 @@ use tokio::net::TcpListener;
 use tokio::task::JoinHandle;
 use tracing::{error, info};
 use utoipa::{OpenApi, ToSchema};
-use utoipa_swagger_ui::{Config, SwaggerUi, Url};
+use utoipa_swagger_ui::{SwaggerUi, Url};
 
 /// Status of a proof generation request
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, ToSchema)]
