@@ -250,7 +250,7 @@ pub fn init_tracing() -> anyhow::Result<()> {
 
 /**
  * @dev this function is copied over from `program/src/main.rs` and used to mimic the Merkle tree proof part of the ZK program
- * It is used to confirm the validity of the Merkle proof we receive from execution RPCs. This function is modified to return an error instaed of panicking
+ * It is used to confirm the validity of the Merkle proof we receive from execution RPCs. This function is modified to return an error instead of panicking
  */
 pub fn verify_storage_slot_proofs(
     execution_state_root: FixedBytes<32>,
