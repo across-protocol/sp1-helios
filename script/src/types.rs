@@ -50,7 +50,7 @@ pub enum ProofRequestStatus {
     WaitingForFinality,
     /// the ZK proof is being generated
     Generating,
-    /// the proof generated succesfully. Ready for consumption
+    /// the proof generated successfully. Ready for consumption
     Success,
     // todo: any other reasons for Errored status?
     /// proof generation failed
