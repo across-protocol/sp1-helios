@@ -14,7 +14,7 @@
 
 # Use the Rust version specified in script/rust-toolchain
 # Stage 1: Builder
-FROM rust:1.82.0 AS builder
+FROM rust:1.89.0 AS builder
 
 # Install required toolchain components specified in script/rust-toolchain
 # This is done early to leverage Docker layer caching
