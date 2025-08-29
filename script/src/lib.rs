@@ -107,7 +107,7 @@ pub async fn try_get_checkpoint(slot: u64) -> anyhow::Result<B256> {
     let base_config = network.to_base_config();
 
     let config = Config {
-        consensus_rpc: Url::from_str("http://dummy.url").unwrap(), // don't think it's used
+        consensus_rpc: Url::from_str("").unwrap(), // don't think it's used
         execution_rpc: None,
         chain: base_config.chain,
         forks: base_config.forks,
@@ -155,7 +155,7 @@ pub async fn try_get_client<S: ConsensusSpec, R: ConsensusRpc<S>>(
     let base_config = network.to_base_config();
 
     let config = Config {
-        consensus_rpc: Url::from_str("http://dummy.url").unwrap(), // I don't think it's used
+        consensus_rpc: Url::from_str("").unwrap(), // I don't think it's used
         execution_rpc: None,
         chain: base_config.chain,
         forks: base_config.forks,
