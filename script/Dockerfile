@@ -7,14 +7,17 @@
 #    docker buildx build --platform linux/arm64 --load -f script/Dockerfile -t sp1-helios/service:local .
 #
 # 2. Run Local Test:
-#    docker run --rm -it -p 8080:8080 --env-file script/.env sp1-helios/service:local
+#    docker run --rm -it -p 8080:8080 --env-file .env sp1-helios/service:local
 #
 # 3. (If Tests Pass) Build & Push Multi-Arch for Deployment:
 #    docker buildx build --platform linux/amd64,linux/arm64 --push -f script/Dockerfile -t your-registry/sp1-helios/service:latest .
 
 # Use the Rust version specified in script/rust-toolchain
 # Stage 1: Builder
-FROM rust:1.89.0 AS builder
+FROM rust:1.89.0-bookworm AS builder
+
+# Make BuildKit's platform vars visible for cache scoping
+ARG TARGETPLATFORM
 
 # Install required toolchain components specified in script/rust-toolchain
 # This is done early to leverage Docker layer caching
@@ -42,9 +45,9 @@ COPY test ./test
 
 # Build the specific binary in release mode
 # Ensure network access if dependencies need downloading during build
-RUN --mount=type=cache,target=/app/target \
-    --mount=type=cache,target=/usr/local/cargo/git/db \
-    --mount=type=cache,target=/usr/local/cargo/registry \
+RUN --mount=type=cache,id=cargo-target-${TARGETPLATFORM},target=/app/target \
+    --mount=type=cache,id=cargo-git-${TARGETPLATFORM},target=/usr/local/cargo/git/db \
+    --mount=type=cache,id=cargo-registry-${TARGETPLATFORM},target=/usr/local/cargo/registry \
     cargo build --release --package sp1-helios-script --bin service && \
     # Copy the built binary from the cached target dir to a regular path
     cp /app/target/release/service /app/service-bin
