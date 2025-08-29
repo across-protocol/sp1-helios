@@ -6,7 +6,10 @@ license.workspace = true
 authors.workspace = true
 
 [dependencies]
-sp1-zkvm = "5.0.0"
+sp1-zkvm = "5.2.1"
+hex = "0.4.3"
+
+# workspace dependencies
 helios-consensus-core = { workspace = true }
 serde_cbor = { workspace = true }
 sp1-helios-primitives = { workspace = true }
@@ -15,4 +18,3 @@ alloy-primitives = { workspace = true, features = ["sha3-keccak"] }
 tree_hash = { workspace = true }
 alloy-trie = { workspace = true }
 alloy-rlp = { workspace = true }
-hex = "0.4.3"
