@@ -9,3 +9,18 @@ Extends SP1 Helios to support proving source chain contract storage slots, in ad
 SP1 Helios verifies the consensus of a source chain in the execution environment of a destination chain. For example, you can run an SP1 Helios light client on Polygon that verifies Ethereum Mainnet's consensus.
 
 [Docs](https://succinctlabs.github.io/sp1-helios/)
+
+## Deploying a new SP1Helios contract
+
+```
+# (from root) Load environment variables
+source .env
+
+cd contracts
+
+# Install dependencies
+forge install
+
+# Deploy contract
+forge script script/Deploy.s.sol --ffi --rpc-url $DEST_RPC_URL --private-key $PRIVATE_KEY --etherscan-api-key $ETHERSCAN_API_KEY --broadcast --verify
+```

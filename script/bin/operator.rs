@@ -121,55 +121,37 @@ impl SP1HeliosOperator {
         mut client: Inner<MainnetConsensusSpec, ConsensusRpcProxy>,
     ) -> Result<Option<SP1ProofWithPublicValues>> {
         // Fetch required values.
-        let provider = ProviderBuilder::new().on_http(self.rpc_url.clone());
+        let provider = ProviderBuilder::new().connect_http(self.rpc_url.clone());
 
         let src_exec_provider =
-            ProviderBuilder::new().on_http(self.source_execution_rpc_url.clone());
+            ProviderBuilder::new().connect_http(self.source_execution_rpc_url.clone());
         let contract = SP1Helios::new(self.contract_address, provider);
 
         // contract head refers to a slot number
-        let current_contract_head: u64 = contract
-            .head()
-            .call()
-            .await
-            .unwrap()
-            .head
-            .try_into()
-            .unwrap();
+        let current_contract_head: u64 = contract.head().call().await.unwrap().try_into().unwrap();
         let period: u64 = contract
             .getSyncCommitteePeriod(U256::from(current_contract_head))
             .call()
             .await
             .unwrap()
-            ._0
             .try_into()
             .unwrap();
         let contract_next_sync_committee = contract
             .syncCommittees(U256::from(period + 1))
             .call()
             .await
-            .unwrap()
-            ._0;
+            .unwrap();
 
         let mut stdin = SP1Stdin::new();
 
-        // Setup client.
-        // !!! `get_updates` gets updates from the current finalized block SYNC_COMMITEE_PERIOD with a cap of 128 updates
-        // Why does it cover only only 128 updates? I think there are 256 possible updates during a commitee period...
-        // !!! So this has nothing to do with how client is bootstrapped! Client has to be bootstrapped with a correct root
-        // to be able to check the correctness of all transitions provided to it.
-        // Look at the name of the variable though. Is it sync committee updates, not block finality updates being fetched?
+        // Get sync committee updates + latest finality updates (signed by the latest sync committee)
         let mut sync_committee_updates = get_updates(&client).await;
-        // I think, gets only the last finality update
         let finality_update = client.rpc.get_finality_update().await.unwrap();
 
         // Check if contract is up to date
         let latest_finalized_header = finality_update.finalized_header();
-        // todo: can't execution_payload_header be empty when there's no block proposed for a slot?
-        // todo: maybe that's when it returns an error.
         let latest_finalized_execution_header = latest_finalized_header
             .execution()
-            // todo: is error empty from .execution() call?
             .map_err(|_e| anyhow::anyhow!("Failed to get execution payload header"))?;
 
         let latest_slot = latest_finalized_header.beacon().slot;
@@ -294,9 +276,8 @@ impl SP1HeliosOperator {
         let public_values_bytes = proof.public_values.to_vec();
 
         let wallet_filler = ProviderBuilder::new()
-            .with_recommended_fillers()
             .wallet(self.wallet.clone())
-            .on_http(self.rpc_url.clone());
+            .connect_http(self.rpc_url.clone());
         let contract = SP1Helios::new(self.contract_address, wallet_filler.clone());
 
         let nonce = wallet_filler
@@ -350,7 +331,6 @@ impl SP1HeliosOperator {
                 .unwrap_or_else(|e| {
                     panic!("Failed to get head. Are you sure the SP1Helios is deployed to address: {:?}? Error: {:?}", self.contract_address, e)
                 })
-                .head
                 .try_into()
                 .unwrap();
 

@@ -19,6 +19,7 @@ use tracing::info;
 use tracing_subscriber::{fmt, layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
 use tree_hash::TreeHash;
 
+use reqwest::Url;
 use std::sync::Arc;
 use tokio::sync::{mpsc::channel, watch};
 pub mod api;
@@ -106,7 +107,7 @@ pub async fn try_get_checkpoint(slot: u64) -> anyhow::Result<B256> {
     let base_config = network.to_base_config();
 
     let config = Config {
-        consensus_rpc: String::new(), // don't think it's used
+        consensus_rpc: Url::from_str("").unwrap(), // don't think it's used
         execution_rpc: None,
         chain: base_config.chain,
         forks: base_config.forks,
@@ -154,7 +155,7 @@ pub async fn try_get_client<S: ConsensusSpec, R: ConsensusRpc<S>>(
     let base_config = network.to_base_config();
 
     let config = Config {
-        consensus_rpc: String::new(), // I don't think it's used
+        consensus_rpc: Url::from_str("").unwrap(), // I don't think it's used
         execution_rpc: None,
         chain: base_config.chain,
         forks: base_config.forks,
@@ -187,13 +188,14 @@ pub async fn try_get_client<S: ConsensusSpec, R: ConsensusRpc<S>>(
 pub async fn create_streaming_client(
     checkpoint: B256,
 ) -> ConsensusClient<MainnetConsensusSpec, ConsensusRpcProxy, ConfigDB> {
-    let consensus_rpc = std::env::var("SOURCE_CONSENSUS_RPC_URL").unwrap();
+    let consensus_rpc_str = std::env::var("SOURCE_CONSENSUS_RPC_URL").unwrap();
+    let consensus_rpc = Url::from_str(&consensus_rpc_str).unwrap();
     let chain_id = std::env::var("SOURCE_CHAIN_ID").unwrap();
     let network = Network::from_chain_id(chain_id.parse().unwrap()).unwrap();
     let base_config = network.to_base_config();
 
     let config = Config {
-        consensus_rpc: consensus_rpc.to_string(),
+        consensus_rpc: consensus_rpc.clone(),
         execution_rpc: None,
         chain: base_config.chain,
         forks: base_config.forks,
