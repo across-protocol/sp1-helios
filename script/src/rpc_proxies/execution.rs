@@ -41,8 +41,9 @@ impl Proxy {
                 {
                     match url_str.parse::<Url>() {
                         Ok(url) => {
-                            let provider =
-                                ProviderBuilder::new().network::<Ethereum>().connect_http(url);
+                            let provider = ProviderBuilder::new()
+                                .network::<Ethereum>()
+                                .connect_http(url);
                             providers.push(provider.erased());
                         }
                         Err(e) => {
