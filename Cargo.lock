@@ -673,9 +673,9 @@ dependencies = [
 
 [[package]]
 name = "alloy-signer-aws"
-version = "1.0.9"
+version = "1.0.19"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6be3d371299b62eac5aa459fa58e8d1c761aabdc637573ae258ab744457fcc88"
+checksum = "cf2abab2db4b0cdf94fa75c553470445f85c5532e612eea720c3f1ac6940f280"
 dependencies = [
  "alloy-consensus",
  "alloy-network",

@@ -16,7 +16,8 @@ helios-ethereum = { git = "https://github.com/a16z/helios", rev = "6a03a343bfad6
 
 # general
 dotenv = "0.15.0"
-# from sp1 workspace
+# from sp1 workspace. By default, we'll send request to the SP1's network using an auction for ZK 
+# proof generation. script/ crate has a reserved-capacity feature to fall back to legacy setup
 sp1-sdk = { version = "5.2.1", default-features = false, features = ["network"] }
 sp1-build = "5.2.1"
 
