@@ -1,7 +1,7 @@
 use alloy::{
     eips::BlockId,
     network::Ethereum,
-    providers::{DynProvider, Provider as _, ProviderBuilder},
+    providers::{Provider as _, ProviderBuilder, RootProvider},
     rpc::types::EIP1186AccountProofResponse,
 };
 use alloy_primitives::{Address, B256};
@@ -19,7 +19,7 @@ use super::multiplex;
 
 #[derive(Clone)]
 pub struct Proxy {
-    providers: Vec<DynProvider>,
+    providers: Vec<RootProvider<Ethereum>>,
 }
 
 impl Proxy {
@@ -28,7 +28,7 @@ impl Proxy {
     }
 
     pub fn try_from_env() -> Result<Self> {
-        let mut providers: Vec<DynProvider> = vec![];
+        let mut providers: Vec<RootProvider<Ethereum>> = vec![];
         let urls_env =
             env::var("SOURCE_EXECUTION_RPC_URL").context("SOURCE_EXECUTION_RPC_URL not set");
 
@@ -44,7 +44,7 @@ impl Proxy {
                             let provider = ProviderBuilder::new()
                                 .network::<Ethereum>()
                                 .connect_http(url);
-                            providers.push(provider.erased());
+                            providers.push(provider.root().clone());
                         }
                         Err(e) => {
                             warn!(
@@ -96,7 +96,7 @@ impl Proxy {
     /// Requests Merkle proof from execution client. Times out if it rpc call takes longer than 4 seconds
     // todo? consider adding retries with exp. backoff.
     async fn get_proof_and_check(
-        client: DynProvider,
+        client: RootProvider<Ethereum>,
         address: Address,
         keys: Vec<B256>,
         block_id: BlockId,
