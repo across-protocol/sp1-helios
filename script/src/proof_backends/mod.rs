@@ -9,16 +9,22 @@ pub mod sp1;
 
 /// Defines the trait for asynchronous proof generation backends (e.g., SP1, R0VM).
 ///
-/// Implementors take a [`ProofRequest`] and produce a serializable `ProofOutput`
+/// Implementors take `ProofInputs` and produce a serializable `ProofOutput`
 /// containing the generated proof data.
 #[async_trait]
 pub trait ProofBackend {
     type ProofOutput: Clone + Serialize + DeserializeOwned + Send + Sync + 'static;
 
-    /*
-    todo: for now, ProofInputs is from `use sp1_helios_primitives::types::ProofInputs;`, which seems
-    tied to sp1, but in reality we want the same inputs for every backend, just moved from the sp1
-    primitives crate
-     */
+    // todo: for now, ProofInputs is from `use sp1_helios_primitives::types::ProofInputs;`, which seems
+    // tied to sp1, but in reality we want the same inputs for every backend, just moved from the sp1
+    // primitives crate
     async fn generate_proof(&self, inputs: ProofInputs) -> Result<Self::ProofOutput>;
+
+    // todo: is this function sutiable to be generalized across different backends? If not, we should
+    // feature-gate both this trait function and the API endpoint for it, but I feel like this should
+    // work for any backend
+    /// Returns a fingerprint of the verifying key for the embedded ZK program. `ProofBackend`
+    /// implementations should return. a compact version of their verifying key (perhaps its hash)
+    /// for easy verification against the on-chain `SP1Helios` contract
+    fn vkey_digest(&self) -> Vec<u8>;
 }

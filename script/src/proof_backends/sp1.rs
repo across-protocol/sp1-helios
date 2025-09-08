@@ -7,7 +7,9 @@ use alloy_primitives::hex;
 use anyhow::{anyhow, Context, Result};
 use async_trait::async_trait;
 use sp1_helios_primitives::types::ProofInputs;
-use sp1_sdk::{EnvProver, ProverClient, SP1ProofWithPublicValues, SP1ProvingKey, SP1Stdin};
+use sp1_sdk::{
+    EnvProver, HashableKey, ProverClient, SP1ProofWithPublicValues, SP1ProvingKey, SP1Stdin,
+};
 use std::sync::Arc;
 use tracing::{debug, info, warn};
 
@@ -120,5 +122,9 @@ impl ProofBackend for SP1Backend {
         let output = Self::format_output(proof_with_values);
 
         Ok(output)
+    }
+
+    fn vkey_digest(&self) -> Vec<u8> {
+        self.proving_key.vk.bytes32_raw().to_vec()
     }
 }
