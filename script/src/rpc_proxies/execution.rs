@@ -3,13 +3,12 @@ use alloy::{
     network::Ethereum,
     providers::{Provider as _, ProviderBuilder, RootProvider},
     rpc::types::EIP1186AccountProofResponse,
-    transports::http::Http,
 };
 use alloy_primitives::{Address, B256};
 use anyhow::anyhow;
 use anyhow::{Context, Result};
 use futures::future::FutureExt;
-use reqwest::{Client, Url};
+use reqwest::Url;
 use std::{env, time::Duration};
 use tokio::time::timeout;
 use tracing::warn;
@@ -20,7 +19,7 @@ use super::multiplex;
 
 #[derive(Clone)]
 pub struct Proxy {
-    providers: Vec<RootProvider<Http<Client>>>,
+    providers: Vec<RootProvider<Ethereum>>,
 }
 
 impl Proxy {
@@ -29,7 +28,7 @@ impl Proxy {
     }
 
     pub fn try_from_env() -> Result<Self> {
-        let mut providers = vec![];
+        let mut providers: Vec<RootProvider<Ethereum>> = vec![];
         let urls_env =
             env::var("SOURCE_EXECUTION_RPC_URL").context("SOURCE_EXECUTION_RPC_URL not set");
 
@@ -42,14 +41,16 @@ impl Proxy {
                 {
                     match url_str.parse::<Url>() {
                         Ok(url) => {
-                            let provider =
-                                ProviderBuilder::new().network::<Ethereum>().on_http(url);
-                            providers.push(provider);
+                            let provider = ProviderBuilder::new()
+                                .network::<Ethereum>()
+                                .connect_http(url);
+                            providers.push(provider.root().clone());
                         }
                         Err(e) => {
                             warn!(
                                 target: "Proxy::from_env",
-                                "Skipping invalid URL '{}': {:#?}", url_str, e
+                                "Skipping invalid URL '{}': {:#?}",
+                                url_str, e
                             );
                         }
                     }
@@ -95,7 +96,7 @@ impl Proxy {
     /// Requests Merkle proof from execution client. Times out if it rpc call takes longer than 4 seconds
     // todo? consider adding retries with exp. backoff.
     async fn get_proof_and_check(
-        client: RootProvider<Http<Client>>,
+        client: RootProvider<Ethereum>,
         address: Address,
         keys: Vec<B256>,
         block_id: BlockId,

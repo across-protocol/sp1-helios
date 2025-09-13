@@ -1,0 +1,7 @@
+# This rust-toolchain file here is not a hard requirement. In theory, it can be used to pin down a
+# rust toolchain version when generating an elf file from `program/` locally, but as per succinct's
+# doc https://docs.succinct.xyz/docs/sp1/writing-programs/compiling , the recommended way to create
+# reproducible builds is via `--docker` flag instead.
+[toolchain]
+channel = "stable"
+components = ["llvm-tools", "rustc-dev"]

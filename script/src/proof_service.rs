@@ -53,6 +53,10 @@ impl<B> ProofService<B>
 where
     B: ProofBackend + Clone + Send + Sync,
 {
+    pub fn vkey_digest_bytes(&self) -> Vec<u8> {
+        self.proof_backend.vkey_digest()
+    }
+
     pub async fn get_proof(
         &mut self,
         id: &ProofId,

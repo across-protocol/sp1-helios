@@ -5,7 +5,7 @@ use crate::{
         ProofId, ProofRequestState, ProofRequestStatus, ProofServiceError, SP1HeliosProofData,
     },
 };
-use alloy_primitives::{Address, B256};
+use alloy_primitives::{hex, Address, B256};
 use alloy_rlp::{RlpDecodable, RlpEncodable};
 use async_trait::async_trait;
 use axum::{
@@ -157,7 +157,8 @@ pub struct FinalizedHeaderResponse {
         health_handler,
         request_proof_handler,
         get_proof_handler,
-        get_finalized_header_handler
+        get_finalized_header_handler,
+        get_vkey_handler
     ),
     components(
         schemas(
@@ -165,7 +166,8 @@ pub struct FinalizedHeaderResponse {
             ProofStatusResponse,
             ProofRequestResponse,
             FinalizedHeaderResponse,
-            ProofStateResponse<SP1HeliosProofData>
+            ProofStateResponse<SP1HeliosProofData>,
+            VkeyResponse
         )
     ),
     tags( (name = "helios-proof-service", description = "Helios Proof Service API") ),
@@ -341,6 +343,33 @@ where
     }
 }
 
+/// Response containing the verifying key digest for the embedded ZK program
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct VkeyResponse {
+    /// Hex string (0x-prefixed) of the vkey digest
+    pub vkey: String,
+}
+
+#[utoipa::path(
+    get,
+    path = "/api/vkey",
+    tag = "helios-proof-service",
+    responses(
+        (status = 200, description = "Verifying key digest retrieved", body = VkeyResponse),
+        (status = 500, description = "Internal server error")
+    )
+)]
+async fn get_vkey_handler<B>(
+    State(service): State<ProofService<B>>,
+) -> Result<impl IntoResponse, ProofServiceError>
+where
+    B: ProofBackend + Clone + Send + Sync + 'static,
+{
+    let digest = service.vkey_digest_bytes();
+    let hex_str = format!("0x{}", hex::encode(digest));
+    Ok((StatusCode::OK, Json(VkeyResponse { vkey: hex_str })))
+}
+
 // --- API Service Trait --- //
 
 /// Defines the interface for the proof service exposed via the API.
@@ -375,7 +404,8 @@ where
         .route("/health", get(health_handler))
         .route("/api/proofs", post(request_proof_handler::<B>))
         .route("/api/proofs/{id}", get(get_proof_handler))
-        .route("/api/finalized-header", get(get_finalized_header_handler));
+        .route("/api/finalized-header", get(get_finalized_header_handler))
+        .route("/api/vkey", get(get_vkey_handler::<B>));
 
     // Serve v1 as primary API, add next versions to this vec! as needed
     let swagger = SwaggerUi::new("/").urls(vec![(
