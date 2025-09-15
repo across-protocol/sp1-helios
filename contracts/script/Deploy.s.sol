@@ -5,7 +5,7 @@ import "forge-std/Script.sol";
 import {SP1Helios} from "../src/SP1Helios.sol";
 import {SP1MockVerifier} from "@sp1-contracts/SP1MockVerifier.sol";
 import {ISP1Verifier} from "@sp1-contracts/ISP1Verifier.sol";
-import {Vm} from "forge-std/Vm.sol";
+// import {Vm} from "forge-std/Vm.sol";
 
 /// @title DeployScript
 /// @notice Deploy script for the SP1Helios contract.
@@ -13,7 +13,8 @@ contract DeployScript is Script {
     function setUp() public {}
 
     function run() public returns (address) {
-        vm.startBroadcast();
+        uint256 deployerPrivateKey = vm.envUint("PRIVATE_KEY");
+        vm.startBroadcast(deployerPrivateKey);
 
         // Update the rollup config to match the current chain. If the starting block number is 0, the latest block number and starting output root will be fetched.
         updateGenesisConfig();
@@ -28,24 +29,39 @@ contract DeployScript is Script {
         // Deploy the SP1 Helios contract.
         SP1Helios helios = new SP1Helios(params);
 
+        vm.stopBroadcast();
+
         return address(helios);
     }
 
-    function readGenesisConfig() public view returns (SP1Helios.InitParams memory params) {
+    function readGenesisConfig()
+        public
+        view
+        returns (SP1Helios.InitParams memory params)
+    {
         string memory root = vm.projectRoot();
         string memory path = string.concat(root, "/", "genesis.json");
         string memory json = vm.readFile(path);
 
         // Manually parse each field from the JSON. Required because of `updaters` memory allocations
-        params.executionStateRoot = vm.parseJsonBytes32(json, ".executionStateRoot");
+        params.executionStateRoot = vm.parseJsonBytes32(
+            json,
+            ".executionStateRoot"
+        );
         params.genesisTime = vm.parseJsonUint(json, ".genesisTime");
         params.head = vm.parseJsonUint(json, ".head");
         params.header = vm.parseJsonBytes32(json, ".header");
-        params.heliosProgramVkey = vm.parseJsonBytes32(json, ".heliosProgramVkey");
+        params.heliosProgramVkey = vm.parseJsonBytes32(
+            json,
+            ".heliosProgramVkey"
+        );
         params.secondsPerSlot = vm.parseJsonUint(json, ".secondsPerSlot");
         params.slotsPerEpoch = vm.parseJsonUint(json, ".slotsPerEpoch");
         params.slotsPerPeriod = vm.parseJsonUint(json, ".slotsPerPeriod");
-        params.syncCommitteeHash = vm.parseJsonBytes32(json, ".syncCommitteeHash");
+        params.syncCommitteeHash = vm.parseJsonBytes32(
+            json,
+            ".syncCommitteeHash"
+        );
         params.verifier = vm.parseJsonAddress(json, ".verifier");
         params.updaters = vm.parseJsonAddressArray(json, ".updaters");
     }
