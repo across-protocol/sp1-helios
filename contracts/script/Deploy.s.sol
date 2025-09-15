@@ -5,7 +5,6 @@ import "forge-std/Script.sol";
 import {SP1Helios} from "../src/SP1Helios.sol";
 import {SP1MockVerifier} from "@sp1-contracts/SP1MockVerifier.sol";
 import {ISP1Verifier} from "@sp1-contracts/ISP1Verifier.sol";
-// import {Vm} from "forge-std/Vm.sol";
 
 /// @title DeployScript
 /// @notice Deploy script for the SP1Helios contract.
