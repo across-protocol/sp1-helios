@@ -22,5 +22,5 @@ cd contracts
 forge install
 
 # Deploy contract
-forge script script/Deploy.s.sol --ffi --rpc-url ethereum --broadcast --verify
+forge script script/Deploy.s.sol --ffi --rpc-url bsc --broadcast --verify
 ```
