@@ -580,13 +580,13 @@ where
             Err(e) => {
                 warn!(
                     target: "proof_service::generate",
-                    "[ProofID: {}] Error generating proof: {:#?}",
+                    "[ProofID: {}] Error generating proof: {}",
                     proof_id.to_hex_string(),
                     e
                 );
                 let mut proof_state = ProofRequestState::new(request.clone());
                 proof_state.status = ProofRequestStatus::Errored;
-                proof_state.error_message = Some(format!("{:#?}", e));
+                proof_state.error_message = Some(e.to_string());
                 proof_state
             }
         };
