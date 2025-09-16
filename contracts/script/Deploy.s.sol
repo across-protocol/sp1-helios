@@ -5,7 +5,6 @@ import "forge-std/Script.sol";
 import {SP1Helios} from "../src/SP1Helios.sol";
 import {SP1MockVerifier} from "@sp1-contracts/SP1MockVerifier.sol";
 import {ISP1Verifier} from "@sp1-contracts/ISP1Verifier.sol";
-import {Vm} from "forge-std/Vm.sol";
 
 /// @title DeployScript
 /// @notice Deploy script for the SP1Helios contract.
@@ -13,7 +12,8 @@ contract DeployScript is Script {
     function setUp() public {}
 
     function run() public returns (address) {
-        vm.startBroadcast();
+        uint256 deployerPrivateKey = vm.envUint("PRIVATE_KEY");
+        vm.startBroadcast(deployerPrivateKey);
 
         // Update the rollup config to match the current chain. If the starting block number is 0, the latest block number and starting output root will be fetched.
         updateGenesisConfig();
@@ -27,6 +27,8 @@ contract DeployScript is Script {
 
         // Deploy the SP1 Helios contract.
         SP1Helios helios = new SP1Helios(params);
+
+        vm.stopBroadcast();
 
         return address(helios);
     }
