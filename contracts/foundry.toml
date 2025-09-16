@@ -7,6 +7,14 @@ optimizer = true
 optimizer_runs = 1000000
 via_ir = true
 
+[rpc_endpoints]
+ethereum = "${NODE_URL_1}"
+hyperevm = "${NODE_URL_999}"
+bsc = "${NODE_URL_56}"
+
+[etherscan]
+ethereum = { key = "${ETHERSCAN_API_KEY}" }
+
 # See more config options https://github.com/foundry-rs/foundry/tree/master/crates/config
 # https://book.getfoundry.sh/reference/config/formatter#line_length
 [fmt]
