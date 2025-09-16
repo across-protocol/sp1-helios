@@ -431,8 +431,7 @@ impl<S: ConsensusSpec, R: ConsensusRpc<S> + std::fmt::Debug> Client<S, R> {
             }
         }
 
-        if candidate.is_some() {
-            let trace = candidate.unwrap();
+        if let Some(trace) = candidate {
             self.apply_store_update(trace.final_store.clone(), trace.last_checkpoint);
 
             Ok(trace)
