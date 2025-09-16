@@ -74,11 +74,11 @@ impl SP1Backend {
                 Ok(proof)
             }
             Ok(Err(prover_err)) => {
-                debug!(target: "sp1_backend::prove", "SP1 prover run failed: {}", prover_err);
+                debug!(target: "sp1_backend::prove", "SP1 prover run failed: {:#?}", prover_err);
                 Err(prover_err.context("SP1 prover run failed"))
             }
             Err(join_err) => {
-                debug!(target: "sp1_backend::prove", "SP1 prover thread panicked or was cancelled: {}", join_err);
+                debug!(target: "sp1_backend::prove", "SP1 prover thread panicked or was cancelled: {:#?}", join_err);
                 Err(anyhow!(
                     "SP1 prover thread panicked or was cancelled: {}",
                     join_err
