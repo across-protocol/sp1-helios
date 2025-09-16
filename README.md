@@ -24,3 +24,9 @@ forge install
 # Deploy contract
 forge script script/Deploy.s.sol --ffi --rpc-url bsc --broadcast --verify
 ```
+
+You can also pass the RPC URL, private key, and etherscan API key as arguments to the script:
+
+```
+forge script script/Deploy.s.sol --ffi --rpc-url $DEST_RPC_URL --private-key $PRIVATE_KEY --etherscan-api-key $ETHERSCAN_API_KEY --broadcast --verify
+```
