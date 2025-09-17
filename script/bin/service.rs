@@ -1,8 +1,6 @@
 use anyhow::Context;
 use sp1_helios_script::init_tracing;
 use sp1_helios_script::proof_backends::sp1::SP1Backend;
-use std::time::Duration;
-use tokio::time::sleep;
 use tracing::error;
 
 use sp1_helios_script::api::start_api_server;
@@ -19,14 +17,12 @@ async fn main() -> anyhow::Result<()> {
     let _api_task_handle = start_api_server(proof_service.clone()).await;
 
     if let Err(e) = sp1_helios_script::proof_service::run(proof_service).await {
-        error!("Error running proof service: {:#?}", e);
-        // todo: temporary "graceful shutdown" hack
-        sleep(Duration::from_secs(5)).await;
+        error!("Error running proof service: {:#}", e);
+        sp1_helios_script::slack_layer::flush().await;
         return Err(e);
     }
 
-    // todo: temporary "graceful shutdown" hack
-    sleep(Duration::from_secs(5)).await;
+    sp1_helios_script::slack_layer::flush().await;
 
     Err(anyhow::anyhow!(
         "proof_service.run exited unexpectedly without returning an error"

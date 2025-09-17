@@ -3,7 +3,12 @@ use chrono::Local;
 use once_cell::sync::Lazy;
 use reqwest::Client;
 use serde::Serialize;
+// todo: can use parking_lot Mutex here instead
+use std::sync::Mutex;
+use std::time::Duration;
 use tokio::task;
+use tokio::task::JoinHandle;
+use tokio::time::sleep;
 use tracing::field::Field;
 use tracing::{field::Visit, Event, Level, Subscriber};
 use tracing_subscriber::layer::{Context, Layer};
@@ -16,6 +21,12 @@ static RUN_ID: Lazy<String> = Lazy::new(|| {
     // Take the first 6 hex characters
     full_uuid.chars().take(6).collect()
 });
+
+// Prune finished Slack tasks only when the list grows past this threshold
+const SLACK_PRUNE_THRESHOLD: usize = 16;
+
+// Track spawned Slack posting tasks so we can flush them on shutdown
+static SLACK_TASK_HANDLES: Lazy<Mutex<Vec<JoinHandle<()>>>> = Lazy::new(|| Mutex::new(Vec::new()));
 
 #[derive(Serialize)]
 struct SlackPayload {
@@ -139,7 +150,7 @@ where
         let client = self.client.clone();
         let url = self.webhook.clone();
         let text = final_text;
-        task::spawn(async move {
+        let handle = task::spawn(async move {
             match client.post(&url).json(&SlackPayload { text }).send().await {
                 Ok(response) => {
                     let status = response.status();
@@ -159,5 +170,35 @@ where
                 }
             }
         });
+        if let Ok(mut v) = SLACK_TASK_HANDLES.lock() {
+            v.push(handle);
+            // Prune occasionally when we have accumulated enough handles
+            if v.len() >= SLACK_PRUNE_THRESHOLD {
+                v.retain(|h| !h.is_finished());
+                if v.capacity() > v.len() * 2 {
+                    v.shrink_to_fit();
+                }
+            }
+        }
+    }
+}
+
+/// Flushes all in-flight Slack send tasks by waiting for the task tracker to drain.
+pub async fn flush() {
+    let maybe_handles: Option<Vec<JoinHandle<()>>> = SLACK_TASK_HANDLES
+        .lock()
+        .ok()
+        .map(|mut v| v.drain(..).collect());
+
+    match maybe_handles {
+        Some(handles) => {
+            for handle in handles {
+                let _ = handle.await;
+            }
+        }
+        None => {
+            // Fallback: if we weren't able to lock the mutex, just wait for 5 seconds before exiting
+            sleep(Duration::from_secs(5)).await;
+        }
     }
 }

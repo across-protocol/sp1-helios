@@ -11,7 +11,7 @@ use sp1_sdk::{
     EnvProver, HashableKey, ProverClient, SP1ProofWithPublicValues, SP1ProvingKey, SP1Stdin,
 };
 use std::sync::Arc;
-use tracing::{debug, info, warn};
+use tracing::{debug, info};
 
 use super::ProofBackend;
 
@@ -74,13 +74,13 @@ impl SP1Backend {
                 Ok(proof)
             }
             Ok(Err(prover_err)) => {
-                warn!(target: "sp1_backend::prove", "SP1 prover failed: {:#?}", prover_err);
-                Err(anyhow!("SP1 prover failed: {:#?}", prover_err))
+                debug!(target: "sp1_backend::prove", "SP1 prover run failed: {:#?}", prover_err);
+                Err(prover_err.context("SP1 prover run failed"))
             }
             Err(join_err) => {
-                warn!(target: "sp1_backend::prove", "SP1 prover thread panicked or was cancelled: {:#?}", join_err);
+                debug!(target: "sp1_backend::prove", "SP1 prover thread panicked or was cancelled: {:#?}", join_err);
                 Err(anyhow!(
-                    "SP1 prover thread panicked or was cancelled: {:#?}",
+                    "SP1 prover thread panicked or was cancelled: {}",
                     join_err
                 ))
             }

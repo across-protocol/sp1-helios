@@ -105,7 +105,7 @@ where
         let proof_request_state = self.get_proof(&proof_id).await?;
 
         if redis_lock_acquired {
-            tracing::debug!(target: "proof_service::api", "Global lock acquired for new proof request ID: {}", proof_id.to_hex_string());
+            debug!(target: "proof_service::api", "Global lock acquired for new proof request ID: {}", proof_id);
 
             let finalized_header =
                 self.redis_store
@@ -199,14 +199,16 @@ where
                     // Lock already exists
                     debug!(
                         target: "proof_service::api",
-                        "Skipping proof generation spawn for ID: {}, lock already held.", proof_id.to_hex_string()
+                        "Skipping proof generation spawn for ID: {}, lock already held.", proof_id
                     );
                 }
                 Err(e) => {
                     // Error acquiring lock
                     warn!(
                         target: "proof_service::api",
-                        "Failed to acquire lock for proof generation ID: {}: {:#?}", proof_id.to_hex_string(), e
+                        "Failed to acquire lock for proof generation ID: {}: {}",
+                        proof_id,
+                        e
                     );
                 }
             }
@@ -323,15 +325,15 @@ where
                         debug!(
                             target: "proof_service::state",
                             "Skipping proof generation spawn for ID: {}, lock already held.",
-                            proof_id.to_hex_string()
+                            proof_id
                         );
                     }
                     Err(e) => {
                         // Redis returned an error while trying to acquire lock
                         warn!(
                             target: "proof_service::state",
-                            "Failed to acquire lock for proof generation spawn ID: {}: {:#?}",
-                            proof_id.to_hex_string(),
+                            "Failed to acquire lock for proof generation spawn ID: {}: {}",
+                            proof_id,
                             e
                         );
                     }
@@ -360,8 +362,8 @@ where
                 info!(target: "proof_service::init", "Finalized header not found in Redis. Falling back to env var.");
             }
             Err(e) => {
-                warn!(target: "proof_service::init", "Error reading finalized header from Redis: {:#?}. Falling back to env var.", e);
-                return Err(anyhow!("{:#?}", e));
+                warn!(target: "proof_service::init", "Error reading finalized header from Redis: {}. Falling back to env var.", e);
+                return Err(e.into());
             }
         }
 
@@ -483,7 +485,7 @@ where
     ) {
         info!(
             target: "proof_service::generate",
-            "[ProofID: {}] Starting proof generation", proof_id.to_hex_string()
+            "[ProofID: {}] Starting proof generation", proof_id
         );
 
         // At this point, this function has exclusive control over this proof_id
@@ -502,23 +504,23 @@ where
                     _ = cancellation_token.cancelled() => {
                         // Release lock on cancellation
                         redis_store_clone.release_proof_generation_lock(&proof_id).await;
-                        debug!(target: "proof_service::generate", "[ProofID: {}] Lock extension task cancelled, released lock.", proof_id.to_hex_string());
+                        debug!(target: "proof_service::generate", "[ProofID: {}] Lock extension task cancelled, released lock.", proof_id);
                         break;
                     }
                     _ = ticker.tick() => {
                         // Use redis_store to extend the lock
                         match redis_store_clone.extend_proof_generation_lock(&proof_id, 2000).await {
                             Ok(true) => {
-                                trace!(target: "proof_service::generate", "[ProofID: {}] Extended worker lock.", proof_id.to_hex_string());
+                                trace!(target: "proof_service::generate", "[ProofID: {}] Extended worker lock.", proof_id);
                             }
                             Ok(false) => {
-                                warn!(target: "proof_service::generate", "[ProofID: {}] Failed to extend worker lock: Lock key does not exist or expired.", proof_id.to_hex_string());
+                                warn!(target: "proof_service::generate", "[ProofID: {}] Failed to extend worker lock: Lock key does not exist or expired.", proof_id);
                                 // If extending fails, maybe the main task finished/crashed, or Redis issue.
                                 // Stop trying to extend.
                                 break;
                             }
                             Err(e) => {
-                                warn!(target: "proof_service::generate", "[ProofID: {}] Error extending worker lock: {:#?}. Releasing lock.", proof_id.to_hex_string(), e);
+                                warn!(target: "proof_service::generate", "[ProofID: {}] Error extending worker lock: {}. Releasing lock.", proof_id, e);
                                 // Release lock on error to prevent dangling locks
                                 redis_store_clone.release_proof_generation_lock(&proof_id).await;
                                 break; // Stop trying on error
@@ -533,7 +535,7 @@ where
         if inputs.is_ok() {
             info!(
                 target: "proof_service::generate",
-                "[ProofID: {}] Successfully generated proof inputs", proof_id.to_hex_string()
+                "[ProofID: {}] Successfully generated proof inputs", proof_id
             );
         }
 
@@ -580,13 +582,13 @@ where
             Err(e) => {
                 warn!(
                     target: "proof_service::generate",
-                    "[ProofID: {}] Error generating proof: {:#?}",
-                    proof_id.to_hex_string(),
+                    "[ProofID: {}] Error generating proof: {:#}",
+                    proof_id,
                     e
                 );
                 let mut proof_state = ProofRequestState::new(request.clone());
                 proof_state.status = ProofRequestStatus::Errored;
-                proof_state.error_message = Some(format!("{:#?}", e));
+                proof_state.error_message = Some(e.to_string());
                 proof_state
             }
         };
@@ -601,14 +603,14 @@ where
                 .await
             {
                 Ok(_) => {
-                    info!(target: "proof_service::generate", "[ProofID: {}] Successfully stored final proof state in Redis.", proof_id.to_hex_string());
+                    info!(target: "proof_service::generate", "[ProofID: {}] Successfully stored final proof state in Redis.", proof_id);
                     break;
                 }
                 Err(e) => {
                     retry_count += 1;
                     warn!(
                         target: "proof_service::generate",
-                        "[ProofID: {}] Failed to store proof state in Redis (attempt {}): {:#?}. Retrying in 1s...",
+                        "[ProofID: {}] Failed to store proof state in Redis (attempt {}): {}. Retrying in 1s...",
                         proof_id.to_hex_string(),
                         retry_count,
                         e
@@ -674,7 +676,7 @@ where
                 Ok(true) => {
                     // Lock acquired! This task is orphaned.
                     let lock_key = self.redis_store.proof_generation_lock_key(&proof_id);
-                    warn!(target: "proof_service::pickup", "Picking up orphaned proof generation task for ID: {}. Lock key acquired: {}", proof_id.to_hex_string(), lock_key);
+                    warn!(target: "proof_service::pickup", "Picking up orphaned proof generation task for ID: {}. Lock key acquired: {}", proof_id, lock_key);
                     picked_up_count += 1;
 
                     // Spawn a new worker for this task.
@@ -690,11 +692,11 @@ where
                 }
                 Ok(false) => {
                     // Lock is held by another worker.
-                    debug!(target: "proof_service::pickup", "Proof ID {} is actively being processed (lock exists).", proof_id.to_hex_string());
+                    debug!(target: "proof_service::pickup", "Proof ID {} is actively being processed (lock exists).", proof_id);
                 }
                 Err(e) => {
                     // Error trying to acquire the lock.
-                    error!(target: "proof_service::pickup", "Failed to check/acquire lock for proof ID {}: {:#?}. Skipping pickup.", proof_id.to_hex_string(), e);
+                    error!(target: "proof_service::pickup", "Failed to check/acquire lock for proof ID {}: {}. Skipping pickup.", proof_id, e);
                 }
             }
         }
@@ -737,7 +739,7 @@ where
 
         // Periodically check for and pick up orphaned proof generation tasks
         if let Err(e) = proof_service.restart_orphaned_proofs().await {
-            warn!(target: "proof_service::run", "Error during orphaned proof pickup check: {:#?}", e);
+            warn!(target: "proof_service::run", "Error during orphaned proof pickup check: {}", e);
         }
 
         // Periodically check that the finalized header stored in redis is no older than allowed MAX_FINALIZED_HEADER_AGE
@@ -807,7 +809,7 @@ async fn update_redis_state<B>(
             }
         }
         Err(e) => {
-            warn!(target: "proof_service::run", "Failed to advance Redis state for finalized header slot {}. Error: {:#?}", finalized_header.beacon().slot, e);
+            warn!(target: "proof_service::run", "Failed to advance Redis state for finalized header slot {}. Error: {}", finalized_header.beacon().slot, e);
         }
     }
 }

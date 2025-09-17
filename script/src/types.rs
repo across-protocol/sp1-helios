@@ -38,6 +38,12 @@ impl From<B256> for ProofId {
     }
 }
 
+impl core::fmt::Display for ProofId {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        write!(f, "{}", self.to_hex_string())
+    }
+}
+
 // todo: consider converting this into a stateful enum
 /// Status of a proof generation request
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -105,14 +111,19 @@ pub struct SP1HeliosProofData {
 pub enum ProofServiceError {
     #[error("Redis error: {0}")]
     RedisError(#[from] redis::RedisError),
-    #[error("Failed to acquire lock for proof request ID {0:?}, likely already processing.")]
+
+    #[error("Failed to acquire lock for proof request ID {0}, likely already processing.")]
     LockContention(ProofId),
-    #[error("Proof request not found: {0:?}")]
+
+    #[error("Proof request not found: {0}")]
     NotFound(ProofId),
+
     #[error("Failed to serialize/deserialize state: {0}")]
     SerializationError(#[from] serde_json::Error),
-    #[error("Proof generation failed for ID {0:?}: {1}")]
+
+    #[error("Proof generation failed for ID {0}: {1}")]
     ProofGenerationFailed(ProofId, String),
+
     #[error("Internal service error: {0}")]
     Internal(String),
 }
