@@ -146,7 +146,6 @@ where
         // Add updates for each proof state
         for (id, state) in updated_states {
             let key = self.proof_state_key(&id);
-            pipe.expire(key, seconds)
             pipe.cmd("SET")
                 .arg(&key)
                 .arg(serde_json::to_string(&state)?)
