@@ -39,8 +39,8 @@ where
         info!(" - Key Prefix: {}", key_prefix);
 
         let config = ConnectionManagerConfig::new()
-            .set_connection_timeout(Duration::from_secs(2))
-            .set_response_timeout(Duration::from_secs(1));
+            .set_connection_timeout(Duration::from_secs(10))
+            .set_response_timeout(Duration::from_secs(10));
 
         let client = Client::open(redis_url.as_str()).context("Failed to create Redis client")?;
         let conn_manager = match tokio::time::timeout(
