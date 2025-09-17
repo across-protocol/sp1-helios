@@ -516,7 +516,7 @@ where
                     }
                     _ = ticker.tick() => {
                         // Use redis_store to extend the lock
-                        match redis_store_clone.extend_proof_generation_lock(&proof_id, LOCK_EXTENSION_BUFFER_SECS * 1_000).await {
+                        match redis_store_clone.extend_proof_generation_lock(&proof_id, (LOCK_EXTENSION_INTERVAL_SECS + LOCK_EXTENSION_BUFFER_SECS) * 1_000).await {
                             Ok(true) => {
                                 trace!(target: "proof_service::generate", "[ProofID: {}] Extended worker lock.", proof_id);
                             }
