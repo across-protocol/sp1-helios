@@ -1,4 +1,4 @@
-use chrono::{Local, Utc};
+use chrono::Utc;
 use once_cell::sync::Lazy;
 use serde_json::{json, Map, Value};
 use std::fmt::Write as FmtWrite;
@@ -186,46 +186,7 @@ where
     }
 }
 
-// Compact console formatter to keep Slack and console messages consistent
-struct ConsoleCompact;
-
-impl<S, N> FormatEvent<S, N> for ConsoleCompact
-where
-    S: tracing::Subscriber + for<'a> LookupSpan<'a>,
-    N: for<'a> FormatFields<'a> + 'static,
-{
-    fn format_event(
-        &self,
-        _ctx: &tracing_subscriber::fmt::FmtContext<'_, S, N>,
-        mut w: Writer<'_>,
-        event: &tracing::Event<'_>,
-    ) -> std::fmt::Result {
-        let ts = Local::now().format("%Y-%m-%dT%H:%M:%S%.3f");
-        let level = event.metadata().level();
-        let target = event.metadata().target();
-        let mut msg = extract_message(event);
-        if msg.is_empty() {
-            // If no explicit message field, fall back to debug-formatting the entire event fields
-            let mut visit = JsonFieldsVisitor::new();
-            event.record(&mut visit);
-            msg = if visit.fields.is_empty() {
-                "Event occurred".to_string()
-            } else {
-                serde_json::to_string(&Value::Object(visit.fields))
-                    .unwrap_or_else(|_| "<unformattable event fields>".to_string())
-            };
-        }
-        writeln!(
-            w,
-            "[{}] [{}] [{:<5}] [{}] {}",
-            ts,
-            run_id(),
-            level,
-            target,
-            msg
-        )
-    }
-}
+// (Removed custom ConsoleCompact; using default fmt layer for console.)
 
 pub fn init_tracing() -> anyhow::Result<()> {
     // 1) Read RUST_LOG or default to "info" for console/default filtering
@@ -274,9 +235,7 @@ pub fn init_tracing() -> anyhow::Result<()> {
             base.with(fmt_layer).init();
         }
     } else {
-        let fmt_layer = fmt::layer()
-            .event_format(ConsoleCompact)
-            .with_writer(std::io::stdout);
+        let fmt_layer = fmt::layer().with_ansi(true).with_writer(std::io::stdout);
 
         if let Some(slack_layer) = slack_layer_opt {
             base.with(fmt_layer).with(slack_layer).init();

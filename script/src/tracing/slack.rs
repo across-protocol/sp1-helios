@@ -51,8 +51,8 @@ where
         let level = *metadata.level();
         let target = metadata.target();
 
-        // Basic level thresholding
-        let below_threshold = level < self.threshold;
+        // Basic level thresholding (send when at or above threshold)
+        let meets_level_treshold = level <= self.threshold;
 
         // Additional inclusion rules for noisy-but-useful SP1 logs
         let mut message = extract_message(event);
@@ -66,7 +66,7 @@ where
             && target == "proof_service::run"
             && message.starts_with("Starting main loop");
 
-        let should_send = (!below_threshold)
+        let should_send = meets_level_treshold
             || is_relevant_generate_event
             || is_useful_sp1_event
             || is_main_loop_start_event;
@@ -89,12 +89,23 @@ where
 
         let ts = Local::now().format("%Y-%m-%dT%H:%M:%S%.3f");
 
-        // Match console formatting for consistency: [ts] [run_id] [LEVEL] [target] msg
+        // Map level to a Slack-friendly emoji
+        let level_emoji = match level {
+            Level::ERROR => ":x:",
+            Level::WARN => ":warning:",
+            Level::INFO => ":white_check_mark:",
+            Level::DEBUG => ":mag:",
+            Level::TRACE => ":mag:",
+        };
+
+        // Old-style Slack line with backticks and rearranged fields:
+        // `[ts] [LEVEL]` :emoji: `[run_id::target]` message
         let text = format!(
-            "[{}] [{}] [{:<5}] [{}] {}",
+            "`[{}] [{:<5}]` {} `[{}::{}]` {}",
             ts,
-            run_id(),
             level,
+            level_emoji,
+            run_id(),
             target,
             message,
         );
