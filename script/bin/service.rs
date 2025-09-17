@@ -1,6 +1,6 @@
 use anyhow::Context;
-use sp1_helios_script::init_tracing;
 use sp1_helios_script::proof_backends::sp1::SP1Backend;
+use sp1_helios_script::{init_tracing, tracing_setup};
 use tracing::error;
 
 use sp1_helios_script::api::start_api_server;
@@ -18,11 +18,11 @@ async fn main() -> anyhow::Result<()> {
 
     if let Err(e) = sp1_helios_script::proof_service::run(proof_service).await {
         error!("Error running proof service: {:#}", e);
-        sp1_helios_script::slack_layer::flush().await;
+        tracing_setup::slack::flush().await;
         return Err(e);
     }
 
-    sp1_helios_script::slack_layer::flush().await;
+    tracing_setup::slack::flush().await;
 
     Err(anyhow::anyhow!(
         "proof_service.run exited unexpectedly without returning an error"
