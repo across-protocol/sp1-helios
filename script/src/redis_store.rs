@@ -10,7 +10,8 @@ use std::{env, marker::PhantomData, time::Duration};
 use tracing::{debug, info, warn};
 
 // todo: change to .env variable once our deployment env is ready for that
-const PROOF_STATE_TTL_SECS: u64 = 7 * 24 * 60 * 60; // 1 week
+pub const PROOF_STATE_TTL_SECS: u64 = 7 * 24 * 60 * 60; // 1 week
+pub const REDIS_TIMEOUT_SECS: u64 = 10;
 
 pub struct RedisStore<ProofOutput>
 where
@@ -42,8 +43,8 @@ where
         info!(" - Key Prefix: {}", key_prefix);
 
         let config = ConnectionManagerConfig::new()
-            .set_connection_timeout(Duration::from_secs(10))
-            .set_response_timeout(Duration::from_secs(10));
+            .set_connection_timeout(Duration::from_secs(REDIS_TIMEOUT_SECS))
+            .set_response_timeout(Duration::from_secs(REDIS_TIMEOUT_SECS));
 
         let client = Client::open(redis_url.as_str()).context("Failed to create Redis client")?;
         let conn_manager = match tokio::time::timeout(
