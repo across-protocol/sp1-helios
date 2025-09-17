@@ -9,6 +9,9 @@ use serde::{de::DeserializeOwned, Serialize};
 use std::{env, marker::PhantomData, time::Duration};
 use tracing::{debug, info, warn};
 
+// todo: change to .env variable once our deployment env is ready for that
+const PROOF_STATE_TTL_SECS: u64 = 7 * 24 * 60 * 60; // 1 week
+
 pub struct RedisStore<ProofOutput>
 where
     ProofOutput: Clone + Serialize + DeserializeOwned + Send + Sync + 'static,
@@ -108,7 +111,9 @@ where
     ) -> Result<(), ProofServiceError> {
         let key = self.proof_state_key(id);
         let json = serde_json::to_string(state)?;
-        self.conn_manager.set::<_, _, ()>(key, json).await?;
+        self.conn_manager
+            .set_ex::<_, _, ()>(key, json, PROOF_STATE_TTL_SECS)
+            .await?;
         Ok(())
     }
 
@@ -141,7 +146,12 @@ where
         // Add updates for each proof state
         for (id, state) in updated_states {
             let key = self.proof_state_key(&id);
-            pipe.set(key, serde_json::to_string(&state)?);
+            pipe.expire(key, seconds)
+            pipe.cmd("SET")
+                .arg(&key)
+                .arg(serde_json::to_string(&state)?)
+                .arg("EX")
+                .arg(PROOF_STATE_TTL_SECS);
         }
 
         // Execute the transaction
