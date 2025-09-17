@@ -498,7 +498,14 @@ where
 
         // Spawn lock extension task
         tokio::spawn(async move {
-            let mut ticker = tokio::time::interval(Duration::from_secs(1));
+            // extend redis "lock key" every 10 seconds
+            const LOCK_EXTENSION_INTERVAL_SECS: u64 = 10;
+            // give proper buffer for this key to not expire between our extension bumps. Set to 1
+            // second longer than configured redis timeout
+            const LOCK_EXTENSION_BUFFER_SECS: u64 = crate::redis_store::REDIS_TIMEOUT_SECS + 1;
+
+            let mut ticker =
+                tokio::time::interval(Duration::from_secs(LOCK_EXTENSION_INTERVAL_SECS));
             loop {
                 tokio::select! {
                     _ = cancellation_token.cancelled() => {
@@ -509,7 +516,7 @@ where
                     }
                     _ = ticker.tick() => {
                         // Use redis_store to extend the lock
-                        match redis_store_clone.extend_proof_generation_lock(&proof_id, 2000).await {
+                        match redis_store_clone.extend_proof_generation_lock(&proof_id, (LOCK_EXTENSION_INTERVAL_SECS + LOCK_EXTENSION_BUFFER_SECS) * 1_000).await {
                             Ok(true) => {
                                 trace!(target: "proof_service::generate", "[ProofID: {}] Extended worker lock.", proof_id);
                             }
