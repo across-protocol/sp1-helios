@@ -414,7 +414,7 @@ where
     )]);
 
     Router::new()
-        .nest("/v1", v1_router.with_state(proof_service.clone()))
+        .nest("/v1", v1_router.with_state(proof_service))
         .merge(swagger)
 }
 
