@@ -44,6 +44,7 @@ where
     B: ProofBackend + Clone + Send + Sync + 'static,
 {
     execution_rpc_proxy: execution::Proxy,
+    // todo: consider using Arc<B> for backends
     proof_backend: B,
     redis_store: RedisStore<B::ProofOutput>,
 }
