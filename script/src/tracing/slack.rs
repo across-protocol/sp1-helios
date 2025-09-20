@@ -87,7 +87,7 @@ where
             message = "Event occurred".to_string();
         }
 
-        let ts = Local::now().format("%Y-%m-%dT%H:%M:%S%.3f");
+        let ts = Local::now().format("%Y-%m-%d %H:%M:%S");
 
         // Map level to a Slack-friendly emoji
         let level_emoji = match level {
