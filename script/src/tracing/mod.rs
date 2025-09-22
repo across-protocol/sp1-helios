@@ -63,14 +63,6 @@ impl tracing::field::Visit for JsonFieldsVisitor {
         self.fields
             .insert(field.name().to_string(), Value::from(value));
     }
-    fn record_i128(&mut self, field: &tracing::field::Field, value: i128) {
-        self.fields
-            .insert(field.name().to_string(), Value::from(value.to_string()));
-    }
-    fn record_u128(&mut self, field: &tracing::field::Field, value: u128) {
-        self.fields
-            .insert(field.name().to_string(), Value::from(value.to_string()));
-    }
     fn record_bool(&mut self, field: &tracing::field::Field, value: bool) {
         self.fields
             .insert(field.name().to_string(), Value::from(value));
@@ -78,10 +70,6 @@ impl tracing::field::Visit for JsonFieldsVisitor {
     fn record_f64(&mut self, field: &tracing::field::Field, value: f64) {
         self.fields
             .insert(field.name().to_string(), Value::from(value));
-    }
-    fn record_str(&mut self, field: &tracing::field::Field, value: &str) {
-        self.fields
-            .insert(field.name().to_string(), Value::from(value.to_string()));
     }
     fn record_error(
         &mut self,
@@ -151,12 +139,15 @@ where
         let line = event.metadata().line();
         let module_path = event.metadata().module_path();
 
-        let mut top = Map::new();
-        top.insert("time".to_string(), Value::from(ts));
-        top.insert("severity".to_string(), Value::from(sev));
-        top.insert("level".to_string(), Value::from(level));
-        top.insert("target".to_string(), Value::from(target.to_string()));
-        top.insert("run_id".to_string(), Value::from(run_id().to_string()));
+        let mut top = Map::from_iter([
+            ("time".to_string(), Value::from(ts)),
+            ("severity".to_string(), Value::from(sev)),
+            ("level".to_string(), Value::from(level)),
+            ("target".to_string(), Value::from(target.to_string())),
+            ("run_id".to_string(), Value::from(run_id().to_string())),
+            ("message".to_string(), Value::from(message)),
+        ]);
+
         if let Some(f) = file {
             top.insert("file".to_string(), Value::from(f.to_string()));
         }
@@ -169,7 +160,6 @@ where
         if !spans.is_empty() {
             top.insert("spans".to_string(), Value::from(spans));
         }
-        top.insert("message".to_string(), Value::from(message));
 
         // Flatten all event fields (excluding message which we already set)
         for (k, v) in visitor.fields.into_iter() {
@@ -185,8 +175,6 @@ where
         )
     }
 }
-
-// (Removed custom ConsoleCompact; using default fmt layer for console.)
 
 pub fn init_tracing() -> anyhow::Result<()> {
     // 1) Read RUST_LOG or default to "info" for console/default filtering

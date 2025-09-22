@@ -98,7 +98,6 @@ where
             Level::TRACE => ":mag:",
         };
 
-        // Old-style Slack line with backticks and rearranged fields:
         // `[ts] [LEVEL]` :emoji: `[run_id::target]` message
         let text = format!(
             "`[{}] [{:<5}]` {} `[{}::{}]` {}",
