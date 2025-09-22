@@ -6,6 +6,8 @@ fs_permissions = [{ access = "read", path = "genesis.json" }]
 optimizer = true
 optimizer_runs = 1000000
 via_ir = true
+solc_version = "0.8.28"
+evm_version = "prague"
 
 [rpc_endpoints]
 bsc = "${NODE_URL_56}"
