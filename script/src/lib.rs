@@ -3,6 +3,7 @@ use alloy_primitives::{keccak256, Bytes, FixedBytes, B256};
 use alloy_rlp::Encodable;
 use alloy_trie::{proof, Nibbles};
 use anyhow::anyhow;
+
 use helios_consensus_core::{
     calc_sync_period,
     consensus_spec::{ConsensusSpec, MainnetConsensusSpec},
@@ -13,28 +14,28 @@ use helios_ethereum::{
     consensus::Inner,
 };
 use helios_ethereum::{consensus::ConsensusClient, database::ConfigDB, rpc::ConsensusRpc};
+use reqwest::Url;
 use rpc_proxies::consensus::ConsensusRpcProxy;
 use sp1_helios_primitives::types::{ContractStorage, VerifiedStorageSlot};
-use tracing::info;
-use tracing_subscriber::{fmt, layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
-use tree_hash::TreeHash;
-
-use reqwest::Url;
 use std::sync::Arc;
 use tokio::sync::{mpsc::channel, watch};
+use tracing::info;
+use tree_hash::TreeHash;
+
 pub mod api;
 pub mod consensus_client;
 pub mod proof_backends;
 pub mod proof_service;
 pub mod redis_store;
 pub mod rpc_proxies;
-pub mod slack_layer;
 pub mod types;
 pub mod util;
+// Expose tracing setup without shadowing the `tracing` crate
+#[path = "tracing/mod.rs"]
+pub mod tracing_setup;
+pub use tracing_setup::init_tracing;
 
-use slack_layer::SlackLayer;
 use std::str::FromStr;
-use tracing::Level;
 
 pub const MAX_REQUEST_LIGHT_CLIENT_UPDATES: u8 = 128;
 pub const CONSENSUS_RPC_ENV_VAR: &str = "SOURCE_CONSENSUS_RPC_URL";
@@ -211,45 +212,6 @@ pub async fn create_streaming_client(
     info!("config.max_checkpoint_age: {:?}", config.max_checkpoint_age);
 
     ConsensusClient::new(&consensus_rpc, Arc::new(config)).unwrap()
-}
-
-pub fn init_tracing() -> anyhow::Result<()> {
-    // 1) Read RUST_LOG or default to "info" for console/default filtering
-    let default_filter =
-        EnvFilter::try_from_default_env().or_else(|_| EnvFilter::try_new("info"))?;
-
-    // 2) Prepare base subscriber registry with console output
-    let subscriber = tracing_subscriber::registry()
-        .with(fmt::layer().with_writer(std::io::stdout))
-        .with(default_filter); // Apply default filtering globally first
-
-    // 3) Conditionally add Slack layer
-    match std::env::var("SLACK_WEBHOOK_URL") {
-        Ok(webhook_url) if !webhook_url.is_empty() => {
-            // Determine Slack log level threshold
-            let slack_level_str =
-                std::env::var("SLACK_LOG_LEVEL").unwrap_or_else(|_| "WARN".to_string());
-            let slack_threshold =
-                Level::from_str(&slack_level_str.to_uppercase()).unwrap_or(Level::WARN); // Default to WARN if parsing fails
-
-            println!(
-                "Initializing Slack tracing layer with webhook URL and level >= {}",
-                slack_threshold
-            ); // Use println! as tracing might not be fully init yet
-
-            let slack_layer = SlackLayer::new(webhook_url, slack_threshold);
-
-            // Add the Slack layer to the subscriber
-            subscriber.with(slack_layer).init();
-        }
-        _ => {
-            // No Slack webhook URL found, just init with console
-            println!("No SLACK_WEBHOOK_URL found, skipping Slack layer initialization.");
-            subscriber.init();
-        }
-    }
-
-    Ok(())
 }
 
 /**

@@ -21,7 +21,7 @@ const ELF: &[u8] = include_bytes!("../../../elf/sp1-helios-elf");
 #[derive(Clone)]
 pub struct SP1Backend {
     prover_client: Arc<EnvProver>,
-    proving_key: SP1ProvingKey,
+    proving_key: Arc<SP1ProvingKey>,
 }
 
 impl SP1Backend {
@@ -41,7 +41,7 @@ impl SP1Backend {
 
         Ok(Self {
             prover_client,
-            proving_key: pk,
+            proving_key: Arc::new(pk),
         })
     }
 

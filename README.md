@@ -30,3 +30,11 @@ You can also pass the RPC URL and etherscan API key as arguments to the script:
 ```
 forge script script/Deploy.s.sol --ffi --rpc-url $DEST_RPC_URL --etherscan-api-key $ETHERSCAN_API_KEY --broadcast --verify
 ```
+
+## Verify the contract
+
+For Plasma chain you need the following comamnd to verify the contract:
+
+```
+forge verify-contract <CONTRACT_ADDRESS> src/SP1Helios.sol:SP1Helios --verifier-url 'https://api.routescan.io/v2/network/mainnet/evm/9745/etherscan'
+```
