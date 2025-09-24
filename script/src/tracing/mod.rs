@@ -22,9 +22,9 @@ pub fn run_id() -> &'static str {
 
 // Extract only the formatted "message" field from a tracing event
 pub(crate) fn extract_message(event: &tracing::Event<'_>) -> String {
-    struct OnlyMessage<'a>(&'a mut String);
+    struct OnlyMessage(String);
 
-    impl<'a> tracing::field::Visit for OnlyMessage<'a> {
+    impl tracing::field::Visit for OnlyMessage {
         fn record_str(&mut self, field: &tracing::field::Field, value: &str) {
             if field.name() == "message" && self.0.is_empty() {
                 self.0.push_str(value);
@@ -38,9 +38,9 @@ pub(crate) fn extract_message(event: &tracing::Event<'_>) -> String {
         }
     }
 
-    let mut msg = String::new();
-    event.record(&mut OnlyMessage(&mut msg));
-    msg
+    let mut msg = OnlyMessage(String::new());
+    event.record(&mut msg);
+    msg.0
 }
 
 // Visitor that captures all event fields into a JSON map so we don't lose information
