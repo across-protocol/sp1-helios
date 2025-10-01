@@ -25,7 +25,7 @@ jobs:
 
     env:
       CRATE_PATH: ./script
-      BIN_NAME: sp1-helios
+      BIN_NAME: genesis
 
     steps:
       - name: Checkout
@@ -43,7 +43,7 @@ jobs:
       - name: Build (release)
         run: |
           cd "$CRATE_PATH"
-          cross build --release --target ${{ matrix.target }}
+          cross build --bin genesis --release --target ${{ matrix.target }}
 
       - name: Prepare artifact
         run: |
