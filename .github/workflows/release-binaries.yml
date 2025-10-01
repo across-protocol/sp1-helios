@@ -1,0 +1,77 @@
+name: release-binaries
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-release:
+    name: Build & Release (multi-target)
+    runs-on: ubuntu-latest
+
+    strategy:
+      fail-fast: false
+      matrix:
+        target:
+          - x86_64-unknown-linux-gnu
+          - aarch64-unknown-linux-gnu
+          - x86_64-apple-darwin
+          - aarch64-apple-darwin
+
+    env:
+      CRATE_PATH: ./script
+      BIN_NAME: sp1-helios
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Install cross (for consistent cross-compiles on Linux)
+        run: |
+          cargo install cross --locked
+
+      - name: Build (release)
+        run: |
+          cd "$CRATE_PATH"
+          cross build --release --target ${{ matrix.target }}
+
+      - name: Prepare artifact
+        run: |
+          set -euo pipefail
+          VERSION="${GITHUB_REF_NAME#v}" # tag 'v0.3.1' -> '0.3.1'
+          TARGET="${{ matrix.target }}"
+          OUTDIR="dist"
+          mkdir -p "$OUTDIR"
+
+          # Resolve built binary path (Linux/macOS are the same layout)
+          BIN="./target/${TARGET}/release/${BIN_NAME}"
+
+          # Strip if available (ignore failures)
+          (strip "$BIN" || true) 2>/dev/null || true
+
+          # Package
+          PKG="${BIN_NAME}-${VERSION}-${TARGET}.tar.gz"
+          tar -czf "${OUTDIR}/${PKG}" -C "$(dirname "$BIN")" "$(basename "$BIN")"
+
+          # Create checksums
+          (cd "$OUTDIR" && shasum -a 256 "$PKG" > "${PKG}.sha256")
+
+      - name: Create or update GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          draft: false
+          prerelease: ${{ contains(github.ref_name, '-rc') || contains(github.ref_name, '-beta') || contains(github.ref_name, '-alpha') }}
+          files: |
+            dist/*.tar.gz
+            dist/*.sha256
