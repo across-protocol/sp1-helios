@@ -43,7 +43,7 @@ jobs:
       - name: Build (release)
         run: |
           cd "$CRATE_PATH"
-          cross build --bin genesis --release --target ${{ matrix.target }}
+          cross build --bin ${BIN_NAME} --release --target ${{ matrix.target }}
 
       - name: Prepare artifact
         run: |
