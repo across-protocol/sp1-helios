@@ -27,19 +27,21 @@ jobs:
           targets: ${{ matrix.target }}
 
       # Make sure we have modern C++17 cross compilers on Linux
-      - name: Install modern GCC for C++17
+      - name: Install modern GCC for C++17 (jammy)
         run: |
           sudo apt-get update
-          sudo apt-get install -y gcc-13 g++-13 gcc-13-aarch64-linux-gnu g++-13-aarch64-linux-gnu
+          sudo apt-get install -y \
+            gcc-12 g++-12 \
+            gcc-12-aarch64-linux-gnu g++-12-aarch64-linux-gnu
 
       - name: Build (release)
         working-directory: ${{ env.CRATE_PATH }}
         env:
-          CC_x86_64_unknown_linux_gnu: gcc-13
-          CXX_x86_64_unknown_linux_gnu: g++-13
+          CC_x86_64_unknown_linux_gnu: gcc-12
+          CXX_x86_64_unknown_linux_gnu: g++-12
           CXXFLAGS_x86_64_unknown_linux_gnu: -std=gnu++17
-          CC_aarch64_unknown_linux_gnu: aarch64-linux-gnu-gcc-13
-          CXX_aarch64_unknown_linux_gnu: aarch64-linux-gnu-g++-13
+          CC_aarch64_unknown_linux_gnu: aarch64-linux-gnu-gcc-12
+          CXX_aarch64_unknown_linux_gnu: aarch64-linux-gnu-g++-12
           CXXFLAGS_aarch64_unknown_linux_gnu: -std=gnu++17
         run: |
           cargo build --bin ${BIN_NAME} --release --target ${{ matrix.target }}
