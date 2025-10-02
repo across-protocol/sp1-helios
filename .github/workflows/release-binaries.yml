@@ -9,7 +9,61 @@ on:
 permissions:
   contents: write
 
+env:
+  CRATE_PATH: ./script
+  BIN_NAME: genesis
+
 jobs:
+  linux:
+    runs-on: ubuntu-22.04
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [x86_64-unknown-linux-gnu, aarch64-unknown-linux-gnu]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      # Make sure we have modern C++17 cross compilers on Linux
+      - name: Install modern GCC for C++17
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc-13 g++-13 gcc-13-aarch64-linux-gnu g++-13-aarch64-linux-gnu
+
+      - name: Build (release)
+        working-directory: ${{ env.CRATE_PATH }}
+        env:
+          CC_x86_64_unknown_linux_gnu: gcc-13
+          CXX_x86_64_unknown_linux_gnu: g++-13
+          CXXFLAGS_x86_64_unknown_linux_gnu: -std=gnu++17
+          CC_aarch64_unknown_linux_gnu: aarch64-linux-gnu-gcc-13
+          CXX_aarch64_unknown_linux_gnu: aarch64-linux-gnu-g++-13
+          CXXFLAGS_aarch64_unknown_linux_gnu: -std=gnu++17
+        run: |
+          cargo build --bin ${BIN_NAME} --release --target ${{ matrix.target }}
+
+      - name: Package artifact
+        run: |
+          set -euo pipefail
+          VERSION="${GITHUB_REF_NAME#v}"
+          TARGET="${{ matrix.target }}"
+          BIN="${{ env.CRATE_PATH }}/target/${TARGET}/release/${{ env.BIN_NAME }}"
+          OUT=dist && mkdir -p "$OUT"
+          # strip if available
+          (strip "$BIN" || true) 2>/dev/null || true
+          PKG="${{ env.BIN_NAME }}-${VERSION}-${TARGET}.tar.gz"
+          tar -czf "${OUT}/${PKG}" -C "$(dirname "$BIN")" "$(basename "$BIN")"
+          (cd "$OUT" && shasum -a 256 "$PKG" > "${PKG}.sha256")
+
+      - name: Upload to Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          files: |
+            dist/*.tar.gz
+            dist/*.sha256
   build-and-release:
     name: Build & Release (multi-target)
     runs-on: ubuntu-latest
