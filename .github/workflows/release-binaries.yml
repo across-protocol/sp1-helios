@@ -51,7 +51,7 @@ jobs:
           set -euo pipefail
           VERSION="${GITHUB_REF_NAME#v}"
           TARGET="${{ matrix.target }}"
-          BIN="${{ env.CRATE_PATH }}/target/${TARGET}/release/${{ env.BIN_NAME }}"
+          BIN="target/${TARGET}/release/${{ env.BIN_NAME }}"
           OUT=dist && mkdir -p "$OUT"
           # strip if available
           (strip "$BIN" || true) 2>/dev/null || true
