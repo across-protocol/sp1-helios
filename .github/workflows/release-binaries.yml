@@ -66,68 +66,72 @@ jobs:
           files: |
             dist/*.tar.gz
             dist/*.sha256
-  build-and-release:
-    name: Build & Release (multi-target)
-    runs-on: ubuntu-latest
 
-    strategy:
-      fail-fast: false
-      matrix:
-        target:
-          - x86_64-unknown-linux-gnu
-          - aarch64-unknown-linux-gnu
-          - x86_64-apple-darwin
-          - aarch64-apple-darwin
-
-    env:
-      CRATE_PATH: ./script
-      BIN_NAME: genesis
-
+  macos-x86_64:
+    runs-on: macos-13 # Intel runner
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
         with:
-          targets: ${{ matrix.target }}
-
-      - name: Install cross (for consistent cross-compiles on Linux)
-        run: |
-          cargo install cross --locked
-
+          targets: x86_64-apple-darwin
       - name: Build (release)
+        working-directory: ${{ env.CRATE_PATH }}
+        env:
+          CC_x86_64_apple_darwin: clang
+          CXX_x86_64_apple_darwin: clang++
+          CXXFLAGS_x86_64_apple_darwin: -std=c++17
         run: |
-          cd "$CRATE_PATH"
-          cross build --bin ${BIN_NAME} --release --target ${{ matrix.target }}
+          cargo build --bin ${BIN_NAME} --release --target x86_64-apple-darwin
 
-      - name: Prepare artifact
+      - name: Package artifact
         run: |
           set -euo pipefail
-          VERSION="${GITHUB_REF_NAME#v}" # tag 'v0.3.1' -> '0.3.1'
-          TARGET="${{ matrix.target }}"
-          OUTDIR="dist"
-          mkdir -p "$OUTDIR"
+          VERSION="${GITHUB_REF_NAME#v}"
+          TARGET="x86_64-apple-darwin"
+          BIN="target/${TARGET}/release/${{ env.BIN_NAME }}"
+          OUT=dist && mkdir -p "$OUT"
+          PKG="${{ env.BIN_NAME }}-${VERSION}-${TARGET}.tar.gz"
+          tar -czf "${OUT}/${PKG}" -C "$(dirname "$BIN")" "$(basename "$BIN")"
+          (cd "$OUT" && shasum -a 256 "$PKG" > "${PKG}.sha256")
 
-          # Resolve built binary path (Linux/macOS are the same layout)
-          BIN="./target/${TARGET}/release/${BIN_NAME}"
-
-          # Strip if available (ignore failures)
-          (strip "$BIN" || true) 2>/dev/null || true
-
-          # Package
-          PKG="${BIN_NAME}-${VERSION}-${TARGET}.tar.gz"
-          tar -czf "${OUTDIR}/${PKG}" -C "$(dirname "$BIN")" "$(basename "$BIN")"
-
-          # Create checksums
-          (cd "$OUTDIR" && shasum -a 256 "$PKG" > "${PKG}.sha256")
-
-      - name: Create or update GitHub Release
+      - name: Upload to Release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ github.ref_name }}
-          draft: false
-          prerelease: ${{ contains(github.ref_name, '-rc') || contains(github.ref_name, '-beta') || contains(github.ref_name, '-alpha') }}
+          files: |
+            dist/*.tar.gz
+            dist/*.sha256
+  macos-arm64:
+    runs-on: macos-14 # Apple Silicon runner
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin
+      - name: Build (release)
+        working-directory: ${{ env.CRATE_PATH }}
+        env:
+          CC_aarch64_apple_darwin: clang
+          CXX_aarch64_apple_darwin: clang++
+          CXXFLAGS_aarch64_apple_darwin: -std=c++17
+        run: |
+          cargo build --bin ${BIN_NAME} --release --target aarch64-apple-darwin
+
+      - name: Package artifact
+        run: |
+          set -euo pipefail
+          VERSION="${GITHUB_REF_NAME#v}"
+          TARGET="aarch64-apple-darwin"
+          BIN="target/${TARGET}/release/${{ env.BIN_NAME }}"
+          OUT=dist && mkdir -p "$OUT"
+          PKG="${{ env.BIN_NAME }}-${VERSION}-${TARGET}.tar.gz"
+          tar -czf "${OUT}/${PKG}" -C "$(dirname "$BIN")" "$(basename "$BIN")"
+          (cd "$OUT" && shasum -a 256 "$PKG" > "${PKG}.sha256")
+
+      - name: Upload to Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
           files: |
             dist/*.tar.gz
             dist/*.sha256
