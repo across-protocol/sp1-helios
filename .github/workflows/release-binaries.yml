@@ -139,6 +139,7 @@ jobs:
           CXXFLAGS_aarch64_apple_darwin: -std=c++17
           CARGO_TARGET_DIR: ${{ github.workspace }}/target/${{ runner.os }}-${{ matrix.target }}-${{ github.run_id }}
           CARGO_BUILD_JOBS: "1"
+          SP1_SKIP_PROGRAM_BUILD: true
         run: |
           cargo build --bin ${BIN_NAME} --release --target aarch64-apple-darwin
 
