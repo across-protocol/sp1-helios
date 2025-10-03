@@ -147,7 +147,7 @@ jobs:
           set -euo pipefail
           VERSION="${GITHUB_REF_NAME#v}"
           TARGET="aarch64-apple-darwin"
-          BIN="target/${TARGET}/release/${{ env.BIN_NAME }}"
+          BIN="${{ github.workspace }}/target/${{ runner.os }}-${{ matrix.target }}-${{ github.run_id }}"
           OUT=dist && mkdir -p "$OUT"
           PKG="${{ env.BIN_NAME }}-${VERSION}-${TARGET}.tar.gz"
           tar -czf "${OUT}/${PKG}" -C "$(dirname "$BIN")" "$(basename "$BIN")"
