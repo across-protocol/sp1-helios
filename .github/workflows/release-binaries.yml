@@ -34,6 +34,13 @@ jobs:
             gcc-12 g++-12 \
             gcc-12-aarch64-linux-gnu g++-12-aarch64-linux-gnu
 
+      - name: Install SP1 toolchain
+        run: |
+          curl -L https://sp1up.succinct.xyz | bash
+          ~/.sp1/bin/sp1up 
+          ~/.sp1/bin/cargo-prove prove --version
+          source ~/.bashrc
+
       - name: Build (release)
         working-directory: ${{ env.CRATE_PATH }}
         env:
@@ -74,6 +81,14 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: x86_64-apple-darwin
+
+      - name: Install SP1 toolchain
+        run: |
+          curl -L https://sp1up.succinct.xyz | bash
+          ~/.sp1/bin/sp1up 
+          ~/.sp1/bin/cargo-prove prove --version
+          source ~/.bashrc
+
       - name: Build (release)
         working-directory: ${{ env.CRATE_PATH }}
         env:
@@ -108,12 +123,14 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: aarch64-apple-darwin
+
       - name: Install SP1 toolchain
         run: |
           curl -L https://sp1up.succinct.xyz | bash
           ~/.sp1/bin/sp1up 
           ~/.sp1/bin/cargo-prove prove --version
           source ~/.bashrc
+
       - name: Build (release)
         working-directory: ${{ env.CRATE_PATH }}
         env:
