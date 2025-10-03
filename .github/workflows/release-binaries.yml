@@ -143,21 +143,20 @@ jobs:
         run: |
           cargo build --bin ${BIN_NAME} --release --target aarch64-apple-darwin
 
-      - name: Package artifact
-        run: |
-          set -euo pipefail
-          VERSION="${GITHUB_REF_NAME#v}"
-          TARGET="aarch64-apple-darwin"
-          BIN="${{ github.workspace }}/target/${{ runner.os }}-${{ matrix.target }}-${{ github.run_id }}"
-          OUT=dist && mkdir -p "$OUT"
-          PKG="${{ env.BIN_NAME }}-${VERSION}-${TARGET}.tar.gz"
-          tar -czf "${OUT}/${PKG}" -C "$(dirname "$BIN")" "$(basename "$BIN")"
-          (cd "$OUT" && shasum -a 256 "$PKG" > "${PKG}.sha256")
+      # - name: Package artifact
+      #   run: |
+      #     set -euo pipefail
+      #     VERSION="${GITHUB_REF_NAME#v}"
+      #     TARGET="aarch64-apple-darwin"
+      #     BIN="${{ github.workspace }}/target/${{ runner.os }}-${{ matrix.target }}-${{ github.run_id }}"
+      #     OUT=dist && mkdir -p "$OUT"
+      #     PKG="${{ env.BIN_NAME }}-${VERSION}-${TARGET}.tar.gz"
+      #     tar -czf "${OUT}/${PKG}" -C "$(dirname "$BIN")" "$(basename "$BIN")"
+      #     (cd "$OUT" && shasum -a 256 "$PKG" > "${PKG}.sha256")
 
       - name: Upload to Release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ github.ref_name }}
           files: |
-            dist/*.tar.gz
-            dist/*.sha256
+            ${{ github.workspace }}/target/${{ runner.os }}-${{ matrix.target }}-${{ github.run_id }}/${{ matrix.target }}/release/${{ env.BIN_NAME }}
