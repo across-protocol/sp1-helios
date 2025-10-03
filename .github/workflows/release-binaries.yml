@@ -74,81 +74,32 @@ jobs:
   #           dist/*.tar.gz
   #           dist/*.sha256
 
-  # macos-x86_64:
-  #   runs-on: macos-13 # Intel runner
-  #   steps:
-  #     - uses: actions/checkout@v4
-  #     - uses: dtolnay/rust-toolchain@stable
-  #       with:
-  #         targets: x86_64-apple-darwin
-
-  #     - name: Install SP1 toolchain
-  #       run: |
-  #         curl -L https://sp1up.succinct.xyz | bash
-  #         ~/.sp1/bin/sp1up
-  #         ~/.sp1/bin/cargo-prove prove --version
-  #         source ~/.bashrc
-
-  #     - name: Build (release)
-  #       working-directory: ${{ env.CRATE_PATH }}
-  #       env:
-  #         CC_x86_64_apple_darwin: clang
-  #         CXX_x86_64_apple_darwin: clang++
-  #         CXXFLAGS_x86_64_apple_darwin: -std=c++17
-  #       run: |
-  #         cargo build --bin ${BIN_NAME} --release --target x86_64-apple-darwin
-
-  #     - name: Package artifact
-  #       run: |
-  #         set -euo pipefail
-  #         VERSION="${GITHUB_REF_NAME#v}"
-  #         TARGET="x86_64-apple-darwin"
-  #         BIN="target/${TARGET}/release/${{ env.BIN_NAME }}"
-  #         OUT=dist && mkdir -p "$OUT"
-  #         PKG="${{ env.BIN_NAME }}-${VERSION}-${TARGET}.tar.gz"
-  #         tar -czf "${OUT}/${PKG}" -C "$(dirname "$BIN")" "$(basename "$BIN")"
-  #         (cd "$OUT" && shasum -a 256 "$PKG" > "${PKG}.sha256")
-
-  #     - name: Upload to Release
-  #       uses: softprops/action-gh-release@v2
-  #       with:
-  #         tag_name: ${{ github.ref_name }}
-  #         files: |
-  #           dist/*.tar.gz
-  #           dist/*.sha256
-  macos-arm64:
-    runs-on: macos-14 # Apple Silicon runner
+  macos-x86_64:
+    runs-on: macos-13 # Intel runner
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
         with:
-          targets: aarch64-apple-darwin
-
-      - name: Install SP1 toolchain
-        run: |
-          curl -L https://sp1up.succinct.xyz | bash
-          ~/.sp1/bin/sp1up 
-          ~/.sp1/bin/cargo-prove prove --version
-          source ~/.bashrc
+          targets: x86_64-apple-darwin
 
       - name: Build (release)
         working-directory: ${{ env.CRATE_PATH }}
         env:
-          CC_aarch64_apple_darwin: clang
-          CXX_aarch64_apple_darwin: clang++
-          CXXFLAGS_aarch64_apple_darwin: -std=c++17
-          CARGO_TARGET_DIR: ${{ github.workspace }}/target/${{ runner.os }}-${{ matrix.target }}-${{ github.run_id }}
+          CC_x86_64_apple_darwin: clang
+          CXX_x86_64_apple_darwin: clang++
+          CXXFLAGS_x86_64_apple_darwin: -std=c++17
+          CARGO_TARGET_DIR: ${{ github.workspace }}/target/${{ runner.os }}-x86_64-apple-darwin-${{ github.run_id }}
           CARGO_BUILD_JOBS: "1"
           SP1_SKIP_PROGRAM_BUILD: true
         run: |
-          cargo build --bin ${BIN_NAME} --release --target aarch64-apple-darwin
+          cargo build --bin ${BIN_NAME} --release --target x86_64-apple-darwin
 
       # - name: Package artifact
       #   run: |
       #     set -euo pipefail
       #     VERSION="${GITHUB_REF_NAME#v}"
-      #     TARGET="aarch64-apple-darwin"
-      #     BIN="${{ github.workspace }}/target/${{ runner.os }}-${{ matrix.target }}-${{ github.run_id }}"
+      #     TARGET="x86_64-apple-darwin"
+      #     BIN="target/${TARGET}/release/${{ env.BIN_NAME }}"
       #     OUT=dist && mkdir -p "$OUT"
       #     PKG="${{ env.BIN_NAME }}-${VERSION}-${TARGET}.tar.gz"
       #     tar -czf "${OUT}/${PKG}" -C "$(dirname "$BIN")" "$(basename "$BIN")"
@@ -159,4 +110,42 @@ jobs:
         with:
           tag_name: ${{ github.ref_name }}
           files: |
-            ${{ github.workspace }}/target/${{ runner.os }}-${{ matrix.target }}-${{ github.run_id }}/${{ matrix.target }}/release/${{ env.BIN_NAME }}
+            ${{ github.workspace }}/target/${{ runner.os }}-x86_64-apple-darwin-${{ github.run_id }}/x86_64-apple-darwin/release/${{ env.BIN_NAME }}
+
+  macos-arm64:
+    runs-on: macos-14 # Apple Silicon runner
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin
+
+      - name: Build (release)
+        working-directory: ${{ env.CRATE_PATH }}
+        env:
+          CC_aarch64_apple_darwin: clang
+          CXX_aarch64_apple_darwin: clang++
+          CXXFLAGS_aarch64_apple_darwin: -std=c++17
+          CARGO_TARGET_DIR: ${{ github.workspace }}/target/${{ runner.os }}-aarch64-apple-darwin-${{ github.run_id }}
+          CARGO_BUILD_JOBS: "1"
+          SP1_SKIP_PROGRAM_BUILD: true
+        run: |
+          cargo build --bin ${BIN_NAME} --release --target aarch64-apple-darwin
+
+      # - name: Package artifact
+      #   run: |
+      #     set -euo pipefail
+      #     VERSION="${GITHUB_REF_NAME#v}"
+      #     TARGET="aarch64-apple-darwin"
+      #     BIN="${{ github.workspace }}/target/${{ runner.os }}-aarch64-apple-darwin-${{ github.run_id }}"
+      #     OUT=dist && mkdir -p "$OUT"
+      #     PKG="${{ env.BIN_NAME }}-${VERSION}-${TARGET}.tar.gz"
+      #     tar -czf "${OUT}/${PKG}" -C "$(dirname "$BIN")" "$(basename "$BIN")"
+      #     (cd "$OUT" && shasum -a 256 "$PKG" > "${PKG}.sha256")
+
+      - name: Upload to Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          files: |
+            ${{ github.workspace }}/target/${{ runner.os }}-aarch64-apple-darwin-${{ github.run_id }}/aarch64-apple-darwin/release/${{ env.BIN_NAME }}
