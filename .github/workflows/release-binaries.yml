@@ -14,65 +14,57 @@ env:
   BIN_NAME: genesis
 
 jobs:
-  # linux:
-  #   runs-on: ubuntu-22.04
-  #   strategy:
-  #     fail-fast: false
-  #     matrix:
-  #       target: [x86_64-unknown-linux-gnu, aarch64-unknown-linux-gnu]
-  #   steps:
-  #     - uses: actions/checkout@v4
-  #     - uses: dtolnay/rust-toolchain@stable
-  #       with:
-  #         targets: ${{ matrix.target }}
+  linux:
+    runs-on: ubuntu-22.04
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-gnu
+            out_name: amd64_linux
+          - target: aarch64-unknown-linux-gnu
+            out_name: arm64_linux
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
 
-  #     # Make sure we have modern C++17 cross compilers on Linux
-  #     - name: Install modern GCC for C++17 (jammy)
-  #       run: |
-  #         sudo apt-get update
-  #         sudo apt-get install -y \
-  #           gcc-12 g++-12 \
-  #           gcc-12-aarch64-linux-gnu g++-12-aarch64-linux-gnu
+      # Make sure we have modern C++17 cross compilers on Linux
+      - name: Install modern GCC for C++17 (jammy)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            gcc-12 g++-12 \
+            gcc-12-aarch64-linux-gnu g++-12-aarch64-linux-gnu
 
-  #     - name: Install SP1 toolchain
-  #       run: |
-  #         curl -L https://sp1up.succinct.xyz | bash
-  #         ~/.sp1/bin/sp1up
-  #         ~/.sp1/bin/cargo-prove prove --version
-  #         source ~/.bashrc
+      - name: Build (release)
+        working-directory: ${{ env.CRATE_PATH }}
+        env:
+          CC_x86_64_unknown_linux_gnu: gcc-12
+          CXX_x86_64_unknown_linux_gnu: g++-12
+          CXXFLAGS_x86_64_unknown_linux_gnu: -std=gnu++17
+          CC_aarch64_unknown_linux_gnu: aarch64-linux-gnu-gcc-12
+          CXX_aarch64_unknown_linux_gnu: aarch64-linux-gnu-g++-12
+          CXXFLAGS_aarch64_unknown_linux_gnu: -std=gnu++17
+          SP1_SKIP_PROGRAM_BUILD: true
+        run: |
+          cargo build --bin ${BIN_NAME} --release --target ${{ matrix.target }}
 
-  #     - name: Build (release)
-  #       working-directory: ${{ env.CRATE_PATH }}
-  #       env:
-  #         CC_x86_64_unknown_linux_gnu: gcc-12
-  #         CXX_x86_64_unknown_linux_gnu: g++-12
-  #         CXXFLAGS_x86_64_unknown_linux_gnu: -std=gnu++17
-  #         CC_aarch64_unknown_linux_gnu: aarch64-linux-gnu-gcc-12
-  #         CXX_aarch64_unknown_linux_gnu: aarch64-linux-gnu-g++-12
-  #         CXXFLAGS_aarch64_unknown_linux_gnu: -std=gnu++17
-  #       run: |
-  #         cargo build --bin ${BIN_NAME} --release --target ${{ matrix.target }}
+      - name: Rename binary
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          SRC="target/${{ matrix.target }}/release/${{ env.BIN_NAME }}"
+          DEST="dist/${{ env.BIN_NAME }}_${VERSION}_${{ matrix.out_name }}"
+          mkdir -p dist
+          chmod +x "$SRC"
+          cp -f "$SRC" "$DEST"
 
-  #     - name: Package artifact
-  #       run: |
-  #         set -euo pipefail
-  #         VERSION="${GITHUB_REF_NAME#v}"
-  #         TARGET="${{ matrix.target }}"
-  #         BIN="target/${TARGET}/release/${{ env.BIN_NAME }}"
-  #         OUT=dist && mkdir -p "$OUT"
-  #         # strip if available
-  #         (strip "$BIN" || true) 2>/dev/null || true
-  #         PKG="${{ env.BIN_NAME }}-${VERSION}-${TARGET}.tar.gz"
-  #         tar -czf "${OUT}/${PKG}" -C "$(dirname "$BIN")" "$(basename "$BIN")"
-  #         (cd "$OUT" && shasum -a 256 "$PKG" > "${PKG}.sha256")
-
-  #     - name: Upload to Release
-  #       uses: softprops/action-gh-release@v2
-  #       with:
-  #         tag_name: ${{ github.ref_name }}
-  #         files: |
-  #           dist/*.tar.gz
-  #           dist/*.sha256
+      - name: Upload to Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          files: dist/${{ env.BIN_NAME }}_${VERSION}_${{ matrix.out_name }}
 
   macos-x86_64:
     runs-on: macos-13 # Intel runner
@@ -94,23 +86,20 @@ jobs:
         run: |
           cargo build --bin ${BIN_NAME} --release --target x86_64-apple-darwin
 
-      # - name: Package artifact
-      #   run: |
-      #     set -euo pipefail
-      #     VERSION="${GITHUB_REF_NAME#v}"
-      #     TARGET="x86_64-apple-darwin"
-      #     BIN="target/${TARGET}/release/${{ env.BIN_NAME }}"
-      #     OUT=dist && mkdir -p "$OUT"
-      #     PKG="${{ env.BIN_NAME }}-${VERSION}-${TARGET}.tar.gz"
-      #     tar -czf "${OUT}/${PKG}" -C "$(dirname "$BIN")" "$(basename "$BIN")"
-      #     (cd "$OUT" && shasum -a 256 "$PKG" > "${PKG}.sha256")
+      - name: Rename binary
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          SRC=${{ github.workspace }}/target/${{ runner.os }}-x86_64-apple-darwin-${{ github.run_id }}/x86_64-apple-darwin/release/${{ env.BIN_NAME }}
+          DEST="dist/${{ env.BIN_NAME }}_${VERSION}_amd64_darwin"
+          mkdir -p dist
+          chmod +x "$SRC"
+          cp -f "$SRC" "$DEST"
 
       - name: Upload to Release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ github.ref_name }}
-          files: |
-            ${{ github.workspace }}/target/${{ runner.os }}-x86_64-apple-darwin-${{ github.run_id }}/x86_64-apple-darwin/release/${{ env.BIN_NAME }}
+          files: dist/${{ env.BIN_NAME }}_${VERSION}_amd64_darwin
 
   macos-arm64:
     runs-on: macos-14 # Apple Silicon runner
@@ -132,20 +121,17 @@ jobs:
         run: |
           cargo build --bin ${BIN_NAME} --release --target aarch64-apple-darwin
 
-      # - name: Package artifact
-      #   run: |
-      #     set -euo pipefail
-      #     VERSION="${GITHUB_REF_NAME#v}"
-      #     TARGET="aarch64-apple-darwin"
-      #     BIN="${{ github.workspace }}/target/${{ runner.os }}-aarch64-apple-darwin-${{ github.run_id }}"
-      #     OUT=dist && mkdir -p "$OUT"
-      #     PKG="${{ env.BIN_NAME }}-${VERSION}-${TARGET}.tar.gz"
-      #     tar -czf "${OUT}/${PKG}" -C "$(dirname "$BIN")" "$(basename "$BIN")"
-      #     (cd "$OUT" && shasum -a 256 "$PKG" > "${PKG}.sha256")
+      - name: Rename binary
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          SRC=${{ github.workspace }}/target/${{ runner.os }}-aarch64-apple-darwin-${{ github.run_id }}/aarch64-apple-darwin/release/${{ env.BIN_NAME }}
+          DEST="dist/${{ env.BIN_NAME }}_${VERSION}_arm64_darwin"
+          mkdir -p dist
+          chmod +x "$SRC"
+          cp -f "$SRC" "$DEST"
 
       - name: Upload to Release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ github.ref_name }}
-          files: |
-            ${{ github.workspace }}/target/${{ runner.os }}-aarch64-apple-darwin-${{ github.run_id }}/aarch64-apple-darwin/release/${{ env.BIN_NAME }}
+          files: dist/${{ env.BIN_NAME }}_${VERSION}_arm64_darwin
