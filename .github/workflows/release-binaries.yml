@@ -54,6 +54,7 @@ jobs:
       - name: Rename binary
         run: |
           VERSION="${GITHUB_REF_NAME#v}"
+          echo "VERSION=$VERSION" >> $GITHUB_ENV
           SRC="target/${{ matrix.target }}/release/${{ env.BIN_NAME }}"
           DEST="dist/${{ env.BIN_NAME }}_${VERSION}_${{ matrix.out_name }}"
           mkdir -p dist
@@ -62,7 +63,6 @@ jobs:
 
       - name: Upload to Release
         uses: softprops/action-gh-release@v2
-        env: VERSION
         with:
           tag_name: ${{ github.ref_name }}
           files: dist/${{ env.BIN_NAME }}_${{ env.VERSION }}_${{ matrix.out_name }}
@@ -90,6 +90,7 @@ jobs:
   #     - name: Rename binary
   #       run: |
   #         VERSION="${GITHUB_REF_NAME#v}"
+  #         echo "VERSION=$VERSION" >> $GITHUB_ENV
   #         SRC=${{ github.workspace }}/target/${{ runner.os }}-x86_64-apple-darwin-${{ github.run_id }}/x86_64-apple-darwin/release/${{ env.BIN_NAME }}
   #         DEST="dist/${{ env.BIN_NAME }}_${VERSION}_amd64_darwin"
   #         mkdir -p dist
@@ -98,7 +99,6 @@ jobs:
 
   #     - name: Upload to Release
   #       uses: softprops/action-gh-release@v2
-  #       env: VERSION
   #       with:
   #         tag_name: ${{ github.ref_name }}
   #         files: dist/${{ env.BIN_NAME }}_${{ env.VERSION }}_amd64_darwin
@@ -126,6 +126,7 @@ jobs:
       - name: Rename binary
         run: |
           VERSION="${GITHUB_REF_NAME#v}"
+          echo "VERSION=$VERSION" >> $GITHU
           SRC=${{ github.workspace }}/target/${{ runner.os }}-aarch64-apple-darwin-${{ github.run_id }}/aarch64-apple-darwin/release/${{ env.BIN_NAME }}
           DEST="dist/${{ env.BIN_NAME }}_${VERSION}_arm64_darwin"
           mkdir -p dist
@@ -134,7 +135,6 @@ jobs:
 
       - name: Upload to Release
         uses: softprops/action-gh-release@v2
-        env: VERSION
         with:
           tag_name: ${{ github.ref_name }}
           files: dist/${{ env.BIN_NAME }}_${{ env.VERSION }}_arm64_darwin
