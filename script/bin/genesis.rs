@@ -7,6 +7,7 @@ use helios_consensus_core::consensus_spec::MainnetConsensusSpec;
 use serde::{Deserialize, Serialize};
 use sp1_helios_script::{get_checkpoint, get_client, get_latest_checkpoint, rpc_proxies};
 use sp1_sdk::{utils, HashableKey, Prover, ProverClient};
+use std::default::Default;
 use std::{
     env, fs,
     path::{Path, PathBuf},
@@ -24,7 +25,7 @@ pub struct GenesisArgs {
     pub env_file: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct GenesisConfig {
     pub execution_state_root: String,
@@ -66,11 +67,14 @@ pub async fn main() -> Result<()> {
     } else {
         checkpoint = get_latest_checkpoint().await;
     }
-    let sp1_prover = env::var("SP1_PROVER").unwrap();
+    let sp1_prover = env::var("SP1_PROVER").expect("SP1_PROVER not set in .env file");
 
     let mut verifier = Address::ZERO;
     if sp1_prover != "mock" {
-        verifier = env::var("SP1_VERIFIER_ADDRESS").unwrap().parse().unwrap();
+        verifier = env::var("SP1_VERIFIER_ADDRESS")
+            .expect("SP1_VERIFIER_ADDRESS not set in .env file")
+            .parse()
+            .expect("Failed to parse SP1_VERIFIER_ADDRESS");
     }
 
     let helios_client =
@@ -102,7 +106,7 @@ pub async fn main() -> Result<()> {
     );
 
     // Read the Genesis config from the contracts directory.
-    let mut genesis_config = get_existing_genesis_config(&workspace_root)?;
+    let mut genesis_config: GenesisConfig = get_default_genesis_config()?;
 
     genesis_config.genesis_time = genesis_time;
     genesis_config.seconds_per_slot = SECONDS_PER_SLOT;
@@ -167,10 +171,8 @@ fn find_project_root() -> Option<PathBuf> {
 }
 
 /// Get the existing genesis config from the contracts directory.
-fn get_existing_genesis_config(workspace_root: &Path) -> Result<GenesisConfig> {
-    let genesis_config_path = workspace_root.join("contracts").join("genesis.json");
-    let genesis_config_content = std::fs::read_to_string(genesis_config_path)?;
-    let genesis_config: GenesisConfig = serde_json::from_str(&genesis_config_content)?;
+fn get_default_genesis_config() -> Result<GenesisConfig> {
+    let genesis_config: GenesisConfig = GenesisConfig::default();
     Ok(genesis_config)
 }
 

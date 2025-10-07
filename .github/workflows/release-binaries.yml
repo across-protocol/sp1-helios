@@ -126,7 +126,7 @@ jobs:
       - name: Rename binary
         run: |
           VERSION="${GITHUB_REF_NAME#v}"
-          echo "VERSION=$VERSION" >> $GITHU
+          echo "VERSION=$VERSION" >> $GITHUB_ENV
           SRC=${{ github.workspace }}/target/${{ runner.os }}-aarch64-apple-darwin-${{ github.run_id }}/aarch64-apple-darwin/release/${{ env.BIN_NAME }}
           DEST="dist/${{ env.BIN_NAME }}_${VERSION}_arm64_darwin"
           mkdir -p dist
