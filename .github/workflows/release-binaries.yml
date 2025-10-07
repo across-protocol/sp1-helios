@@ -22,8 +22,8 @@ jobs:
         include:
           - target: x86_64-unknown-linux-gnu
             out_name: amd64_linux
-          - target: aarch64-unknown-linux-gnu
-            out_name: arm64_linux
+          # - target: aarch64-unknown-linux-gnu
+          #   out_name: arm64_linux
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -62,44 +62,46 @@ jobs:
 
       - name: Upload to Release
         uses: softprops/action-gh-release@v2
+        env: VERSION
         with:
           tag_name: ${{ github.ref_name }}
-          files: dist/${{ env.BIN_NAME }}_${VERSION}_${{ matrix.out_name }}
+          files: dist/${{ env.BIN_NAME }}_${{ env.VERSION }}_${{ matrix.out_name }}
 
-  macos-x86_64:
-    runs-on: macos-13 # Intel runner
-    steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: x86_64-apple-darwin
+  # macos-x86_64:
+  #   runs-on: macos-13 # Intel runner
+  #   steps:
+  #     - uses: actions/checkout@v4
+  #     - uses: dtolnay/rust-toolchain@stable
+  #       with:
+  #         targets: x86_64-apple-darwin
 
-      - name: Build (release)
-        working-directory: ${{ env.CRATE_PATH }}
-        env:
-          CC_x86_64_apple_darwin: clang
-          CXX_x86_64_apple_darwin: clang++
-          CXXFLAGS_x86_64_apple_darwin: -std=c++17
-          CARGO_TARGET_DIR: ${{ github.workspace }}/target/${{ runner.os }}-x86_64-apple-darwin-${{ github.run_id }}
-          CARGO_BUILD_JOBS: "1"
-          SP1_SKIP_PROGRAM_BUILD: true
-        run: |
-          cargo build --bin ${BIN_NAME} --release --target x86_64-apple-darwin
+  #     - name: Build (release)
+  #       working-directory: ${{ env.CRATE_PATH }}
+  #       env:
+  #         CC_x86_64_apple_darwin: clang
+  #         CXX_x86_64_apple_darwin: clang++
+  #         CXXFLAGS_x86_64_apple_darwin: -std=c++17
+  #         CARGO_TARGET_DIR: ${{ github.workspace }}/target/${{ runner.os }}-x86_64-apple-darwin-${{ github.run_id }}
+  #         CARGO_BUILD_JOBS: "1"
+  #         SP1_SKIP_PROGRAM_BUILD: true
+  #       run: |
+  #         cargo build --bin ${BIN_NAME} --release --target x86_64-apple-darwin
 
-      - name: Rename binary
-        run: |
-          VERSION="${GITHUB_REF_NAME#v}"
-          SRC=${{ github.workspace }}/target/${{ runner.os }}-x86_64-apple-darwin-${{ github.run_id }}/x86_64-apple-darwin/release/${{ env.BIN_NAME }}
-          DEST="dist/${{ env.BIN_NAME }}_${VERSION}_amd64_darwin"
-          mkdir -p dist
-          chmod +x "$SRC"
-          cp -f "$SRC" "$DEST"
+  #     - name: Rename binary
+  #       run: |
+  #         VERSION="${GITHUB_REF_NAME#v}"
+  #         SRC=${{ github.workspace }}/target/${{ runner.os }}-x86_64-apple-darwin-${{ github.run_id }}/x86_64-apple-darwin/release/${{ env.BIN_NAME }}
+  #         DEST="dist/${{ env.BIN_NAME }}_${VERSION}_amd64_darwin"
+  #         mkdir -p dist
+  #         chmod +x "$SRC"
+  #         cp -f "$SRC" "$DEST"
 
-      - name: Upload to Release
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: ${{ github.ref_name }}
-          files: dist/${{ env.BIN_NAME }}_${VERSION}_amd64_darwin
+  #     - name: Upload to Release
+  #       uses: softprops/action-gh-release@v2
+  #       env: VERSION
+  #       with:
+  #         tag_name: ${{ github.ref_name }}
+  #         files: dist/${{ env.BIN_NAME }}_${{ env.VERSION }}_amd64_darwin
 
   macos-arm64:
     runs-on: macos-14 # Apple Silicon runner
@@ -132,6 +134,7 @@ jobs:
 
       - name: Upload to Release
         uses: softprops/action-gh-release@v2
+        env: VERSION
         with:
           tag_name: ${{ github.ref_name }}
-          files: dist/${{ env.BIN_NAME }}_${VERSION}_arm64_darwin
+          files: dist/${{ env.BIN_NAME }}_${{ env.VERSION }}_arm64_darwin
