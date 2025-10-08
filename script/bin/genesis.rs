@@ -40,11 +40,15 @@ SEE ALSO:
 "
 )]
 pub struct GenesisArgs {
-    #[arg(long)]
+    #[arg(long, help = "The slot to get the genesis parameters from")]
     pub slot: Option<u64>,
-    #[arg(long, default_value = ".env")]
+    #[arg(long, default_value = ".env", help = "The .env file to use")]
     pub env_file: String,
-    #[arg(long, default_value = "contracts")]
+    #[arg(
+        long,
+        default_value = "contracts",
+        help = "The output directory for the genesis.json file"
+    )]
     pub out: String,
 }
 
