@@ -23,6 +23,8 @@ pub struct GenesisArgs {
     pub slot: Option<u64>,
     #[arg(long, default_value = ".env")]
     pub env_file: String,
+    #[arg(long, default_value = "contracts")]
+    pub out: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -155,7 +157,7 @@ pub async fn main() -> Result<()> {
 
     genesis_config.updaters = updaters;
 
-    write_genesis_config(&workspace_root, &genesis_config)?;
+    write_genesis_config(&workspace_root, &genesis_config, args.out)?;
 
     Ok(())
 }
@@ -177,8 +179,12 @@ fn get_default_genesis_config() -> Result<GenesisConfig> {
 }
 
 /// Write the genesis config to the contracts directory.
-fn write_genesis_config(workspace_root: &Path, genesis_config: &GenesisConfig) -> Result<()> {
-    let genesis_config_path = workspace_root.join("contracts").join("genesis.json");
+fn write_genesis_config(
+    workspace_root: &Path,
+    genesis_config: &GenesisConfig,
+    out: String,
+) -> Result<()> {
+    let genesis_config_path = workspace_root.join(out).join("genesis.json");
     fs::write(
         genesis_config_path,
         serde_json::to_string_pretty(&genesis_config)?,
