@@ -34,9 +34,6 @@ OPTIONS:
 
 EXAMPLES:
   genesis --slot 12345 --env-file .env.local --out ./contracts
-
-SEE ALSO:
-  cargo, rustc
 "
 )]
 pub struct GenesisArgs {
@@ -133,7 +130,7 @@ pub async fn main() -> Result<()> {
     );
 
     // Read the Genesis config from the contracts directory.
-    let mut genesis_config: GenesisConfig = get_default_genesis_config()?;
+    let mut genesis_config: GenesisConfig = GenesisConfig::default();
 
     genesis_config.genesis_time = genesis_time;
     genesis_config.seconds_per_slot = SECONDS_PER_SLOT;
@@ -195,12 +192,6 @@ fn find_project_root() -> Option<PathBuf> {
         }
     }
     Some(path)
-}
-
-/// Get the existing genesis config from the contracts directory.
-fn get_default_genesis_config() -> Result<GenesisConfig> {
-    let genesis_config: GenesisConfig = GenesisConfig::default();
-    Ok(genesis_config)
 }
 
 /// Write the genesis config to the contracts directory.
