@@ -17,7 +17,28 @@ use tree_hash::TreeHash;
 const HELIOS_ELF: &[u8] = include_bytes!("../../elf/sp1-helios-elf");
 
 #[derive(Parser, Debug, Clone)]
-#[command(about = "Get the genesis parameters from a block.")]
+#[command(
+    name = "genesis",
+    version,
+    about = "Get the genesis parameters from a block.",
+    long_about = None,
+    // A man-ish help layout
+    help_template = "\
+{name} — {about}
+
+USAGE:
+  {usage}
+
+OPTIONS:
+{all-args}
+
+EXAMPLES:
+  genesis --slot 12345 --env-file .env.local --out ./contracts
+
+SEE ALSO:
+  cargo, rustc
+"
+)]
 pub struct GenesisArgs {
     #[arg(long)]
     pub slot: Option<u64>,
