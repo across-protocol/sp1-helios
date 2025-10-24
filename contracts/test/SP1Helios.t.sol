@@ -521,10 +521,9 @@ contract SP1HeliosTest is Test {
         bytes32 adminRole = immutableHelios.getRoleAdmin(immutableHelios.UPDATER_ROLE());
         assertEq(adminRole, bytes32(0)); // No admin role
 
-        // Verify even the updater can't add new updaters
-        vm.prank(updatersArray[0]);
-        // No method to call - these functions have been removed
-        // The test just verifies that the role is correctly fixed at initialization
+        // Verify there's no admin for the VKEY_UPDATER_ROLE
+        adminRole = immutableHelios.getRoleAdmin(immutableHelios.VKEY_UPDATER_ROLE());
+        assertEq(adminRole, bytes32(0)); // No admin role
     }
 
     function testUpdateThroughMultipleSyncCommittees() public {
