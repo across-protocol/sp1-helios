@@ -11,6 +11,7 @@ contract SP1HeliosTest is Test {
     SP1Helios helios;
     SP1MockVerifier mockVerifier;
     address initialUpdater = address(0x2);
+    address vkeyUpdater = address(0x3);
 
     // Constants for test setup
     uint256 constant GENESIS_TIME = 1606824023; // Dec 1, 2020
@@ -41,6 +42,7 @@ contract SP1HeliosTest is Test {
             slotsPerPeriod: SLOTS_PER_PERIOD,
             syncCommitteeHash: INITIAL_SYNC_COMMITTEE_HASH,
             verifier: address(mockVerifier),
+            vkeyUpdater: vkeyUpdater,
             updaters: updatersArray
         });
 
@@ -62,6 +64,7 @@ contract SP1HeliosTest is Test {
         );
         // Check roles
         assertTrue(helios.hasRole(helios.UPDATER_ROLE(), initialUpdater));
+        assertTrue(helios.hasRole(helios.VKEY_UPDATER_ROLE(), vkeyUpdater));
         assertEq(helios.verifier(), address(mockVerifier));
     }
 
@@ -167,6 +170,7 @@ contract SP1HeliosTest is Test {
             slotsPerPeriod: SLOTS_PER_PERIOD,
             syncCommitteeHash: INITIAL_SYNC_COMMITTEE_HASH,
             verifier: address(newMockVerifier),
+            vkeyUpdater: vkeyUpdater,
             updaters: updatersArray
         });
 
@@ -407,7 +411,30 @@ contract SP1HeliosTest is Test {
         helios.update(proof, publicValues);
     }
 
-    function testRoleBasedAccessControl() public {
+    function testVkeyUpdaterRoleBasedAccessControl() public {
+        address nonVkeyUpdater = address(0x4);
+
+        // vkeyUpdater has the VKEY_UPDATER_ROLE
+        assertTrue(helios.hasRole(helios.VKEY_UPDATER_ROLE(), vkeyUpdater));
+
+        // nonVkeyUpdater doesn't have the VKEY_UPDATER_ROLE
+        assertFalse(helios.hasRole(helios.VKEY_UPDATER_ROLE(), nonVkeyUpdater));
+
+        bytes32 newHeliosProgramVkey = bytes32(uint256(HELIOS_PROGRAM_VKEY) + 1);
+
+        // nonVkeyUpdater cannot call updateHeliosProgramVkey
+        vm.prank(nonVkeyUpdater);
+        vm.expectRevert();
+        helios.updateHeliosProgramVkey(newHeliosProgramVkey);
+        assertEq(helios.heliosProgramVkey(), HELIOS_PROGRAM_VKEY);
+
+        // vkeyUpdater can call updateHeliosProgramVkey
+        vm.prank(vkeyUpdater);
+        helios.updateHeliosProgramVkey(newHeliosProgramVkey);
+        assertEq(helios.heliosProgramVkey(), newHeliosProgramVkey);
+    }
+
+    function testUpdaterRoleBasedAccessControl() public {
         address nonUpdater = address(0x4);
 
         // Initial updater has the UPDATER_ROLE
@@ -453,6 +480,7 @@ contract SP1HeliosTest is Test {
             slotsPerPeriod: SLOTS_PER_PERIOD,
             syncCommitteeHash: INITIAL_SYNC_COMMITTEE_HASH,
             verifier: address(newMockVerifier),
+            vkeyUpdater: vkeyUpdater,
             updaters: updatersArray
         });
 
@@ -482,6 +510,7 @@ contract SP1HeliosTest is Test {
             slotsPerPeriod: SLOTS_PER_PERIOD,
             syncCommitteeHash: INITIAL_SYNC_COMMITTEE_HASH,
             verifier: address(newMockVerifier),
+            vkeyUpdater: vkeyUpdater,
             updaters: updatersArray
         });
 
