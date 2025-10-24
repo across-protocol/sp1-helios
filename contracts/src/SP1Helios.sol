@@ -258,11 +258,16 @@ contract SP1Helios is AccessControlEnumerable {
         }
     }
 
+    /// @notice Updates the helios program vkey
+    /// @dev Only callable by the VKEY_UPDATER_ROLE.
+    /// @param newHeliosProgramVkey The new helios program vkey
     function updateHeliosProgramVkey(bytes32 newHeliosProgramVkey)
         external
         onlyRole(VKEY_UPDATER_ROLE)
     {
         heliosProgramVkey = newHeliosProgramVkey;
+
+        emit HeliosProgramVkeyUpdated(newHeliosProgramVkey);
     }
 
     /// @notice Gets the sync committee period from a slot
