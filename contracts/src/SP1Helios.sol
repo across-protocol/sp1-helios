@@ -27,6 +27,9 @@ contract SP1Helios is AccessControlEnumerable {
     /// @notice Role for updater operations
     bytes32 public constant UPDATER_ROLE = keccak256("UPDATER_ROLE");
 
+    /// @notice Role for updating VKEY
+    bytes32 public constant VKEY_UPDATER_ROLE = keccak256("VKEY_UPDATER_ROLE");
+
     /// @notice Maximum number of time behind current timestamp for a block to be used for proving
     /// @dev This is set to 1 week to prevent timing attacks where malicious validators
     /// could retroactively create forks that diverge from the canonical chain. To minimize this
@@ -49,7 +52,7 @@ contract SP1Helios is AccessControlEnumerable {
     mapping(bytes32 computedStorageKey => bytes32 storageValue) public storageValues;
 
     /// @notice The verification key for the SP1 Helios program
-    bytes32 public immutable heliosProgramVkey;
+    bytes32 public heliosProgramVkey;
 
     /// @notice The deployed SP1 verifier contract
     address public immutable verifier;
@@ -86,6 +89,7 @@ contract SP1Helios is AccessControlEnumerable {
         uint256 slotsPerPeriod;
         bytes32 syncCommitteeHash;
         address verifier;
+        address vkeyUpdater;
         address[] updaters;
     }
 
@@ -112,6 +116,10 @@ contract SP1Helios is AccessControlEnumerable {
     /// @param updater The address granted the UPDATER_ROLE.
     event UpdaterAdded(address indexed updater);
 
+    /// @notice Emitted when the helios program vkey is updated.
+    /// @param newHeliosProgramVkey The new helios program vkey.
+    event HeliosProgramVkeyUpdated(bytes32 indexed newHeliosProgramVkey);
+
     error NonIncreasingHead(uint256 slot);
     error SyncCommitteeAlreadySet(uint256 period);
     error NewHeaderMismatch(uint256 slot);
@@ -136,6 +144,8 @@ contract SP1Helios is AccessControlEnumerable {
         executionStateRoots[params.head] = params.executionStateRoot;
         head = params.head;
         verifier = params.verifier;
+
+        _grantRole(VKEY_UPDATER_ROLE, params.vkeyUpdater);
 
         // Make sure at least one updater is provided
         require(params.updaters.length > 0, NoUpdatersProvided());
@@ -246,6 +256,13 @@ contract SP1Helios is AccessControlEnumerable {
                 emit SyncCommitteeUpdate(nextPeriod, po.nextSyncCommitteeHash);
             }
         }
+    }
+
+    function updateHeliosProgramVkey(bytes32 newHeliosProgramVkey)
+        external
+        onlyRole(VKEY_UPDATER_ROLE)
+    {
+        heliosProgramVkey = newHeliosProgramVkey;
     }
 
     /// @notice Gets the sync committee period from a slot
