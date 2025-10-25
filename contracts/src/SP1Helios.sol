@@ -12,6 +12,9 @@ import {AccessControlEnumerable} from "@openzeppelin/access/extensions/AccessCon
 /// Updater permissions are fixed at contract creation time and cannot be modified afterward.
 /// @custom:security-contact bugs@across.to
 contract SP1Helios is AccessControlEnumerable {
+    /// @notice Whether the VKEY_UPDATER_ROLE has been transferred
+    bool public vkeyUpdaterRoleTransferred;
+
     /// @notice The timestamp at which the beacon chain genesis block was processed
     uint256 public immutable GENESIS_TIME;
 
@@ -120,6 +123,10 @@ contract SP1Helios is AccessControlEnumerable {
     /// @param newHeliosProgramVkey The new helios program vkey.
     event HeliosProgramVkeyUpdated(bytes32 indexed newHeliosProgramVkey);
 
+    /// @notice Emitted when the VKEY_UPDATER_ROLE is transferred to a new address.
+    /// @param newVkeyUpdater The new address that has the VKEY_UPDATER_ROLE.
+    event VkeyUpdaterRoleTransferred(address indexed newVkeyUpdater);
+
     error NonIncreasingHead(uint256 slot);
     error SyncCommitteeAlreadySet(uint256 period);
     error NewHeaderMismatch(uint256 slot);
@@ -129,6 +136,7 @@ contract SP1Helios is AccessControlEnumerable {
     error PreviousHeaderMismatch(bytes32 given, bytes32 expected);
     error PreviousHeadTooOld(uint256 slot);
     error NoUpdatersProvided();
+    error VkeyUpdaterRoleAlreadyTransferred();
 
     /// @notice Initializes the SP1Helios contract with the provided parameters
     /// @dev Sets up immutable contract state and grants the UPDATER_ROLE to the provided updaters
@@ -256,6 +264,24 @@ contract SP1Helios is AccessControlEnumerable {
                 emit SyncCommitteeUpdate(nextPeriod, po.nextSyncCommitteeHash);
             }
         }
+    }
+
+    /// @notice Transfers the VKEY_UPDATER_ROLE to a new address
+    /// @dev Only callable by the current VKEY_UPDATER_ROLE, can only be called once.
+    /// @param newVkeyUpdater The new address that will have the VKEY_UPDATER_ROLE.
+    function transferVkeyUpdaterRole(address newVkeyUpdater)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            
+        external
+        onlyRole(VKEY_UPDATER_ROLE)
+    {
+        if (vkeyUpdaterRoleTransferred)
+            revert VkeyUpdaterRoleAlreadyTransferred();
+        
+        _revokeRole(VKEY_UPDATER_ROLE, msg.sender);
+        _grantRole(VKEY_UPDATER_ROLE, newVkeyUpdater);
+
+        vkeyUpdaterRoleTransferred = true;
+
+        emit VkeyUpdaterRoleTransferred(newVkeyUpdater);
     }
 
     /// @notice Updates the helios program vkey
