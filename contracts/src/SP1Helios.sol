@@ -269,13 +269,11 @@ contract SP1Helios is AccessControlEnumerable {
     /// @notice Transfers the VKEY_UPDATER_ROLE to a new address
     /// @dev Only callable by the current VKEY_UPDATER_ROLE, can only be called once.
     /// @param newVkeyUpdater The new address that will have the VKEY_UPDATER_ROLE.
-    function transferVkeyUpdaterRole(address newVkeyUpdater)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            
-        external
-        onlyRole(VKEY_UPDATER_ROLE)
-    {
-        if (vkeyUpdaterRoleTransferred)
+    function transferVkeyUpdaterRole(address newVkeyUpdater) external onlyRole(VKEY_UPDATER_ROLE) {
+        if (vkeyUpdaterRoleTransferred) {
             revert VkeyUpdaterRoleAlreadyTransferred();
-        
+        }
+
         _revokeRole(VKEY_UPDATER_ROLE, msg.sender);
         _grantRole(VKEY_UPDATER_ROLE, newVkeyUpdater);
 

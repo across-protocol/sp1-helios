@@ -458,7 +458,6 @@ contract SP1HeliosTest is Test {
         vm.prank(nonVkeyUpdater);
         helios.transferVkeyUpdaterRole(nonVkeyUpdater);
 
-
         // initialVkeyUpdater can call transferVkeyUpdaterRole
         vm.prank(initialVkeyUpdater);
         helios.transferVkeyUpdaterRole(newVkeyUpdater);
@@ -468,9 +467,7 @@ contract SP1HeliosTest is Test {
         // transferVkeyUpdaterRole cannot be called a second time
         vm.prank(newVkeyUpdater);
         vm.expectRevert(
-            abi.encodeWithSelector(
-                SP1Helios.VkeyUpdaterRoleAlreadyTransferred.selector
-            )
+            abi.encodeWithSelector(SP1Helios.VkeyUpdaterRoleAlreadyTransferred.selector)
         );
         helios.transferVkeyUpdaterRole(nonVkeyUpdater);
     }
