@@ -418,7 +418,7 @@ contract SP1HeliosTest is Test {
         // initialVkeyUpdater has the VKEY_UPDATER_ROLE
         assertTrue(helios.hasRole(helios.VKEY_UPDATER_ROLE(), initialVkeyUpdater));
 
-        // is admin of the VKEY_UPDATER_ROLE
+        // initalVkeyUpdater is admin of the VKEY_UPDATER_ROLE
         assertTrue(helios.hasRole(helios.getRoleAdmin(helios.VKEY_UPDATER_ROLE()), initialVkeyUpdater));
 
         // nonVkeyUpdater doesn't have the VKEY_UPDATER_ROLE
