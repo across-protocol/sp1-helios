@@ -413,9 +413,13 @@ contract SP1HeliosTest is Test {
 
     function testVkeyUpdateRoleBasedAccessControl() public {
         address nonVkeyUpdater = address(0x4);
+        address newVkeyUpdater = address(0x5);
 
         // initialVkeyUpdater has the VKEY_UPDATER_ROLE
         assertTrue(helios.hasRole(helios.VKEY_UPDATER_ROLE(), initialVkeyUpdater));
+
+        // is admin of the VKEY_UPDATER_ROLE
+        assertTrue(helios.hasRole(helios.getRoleAdmin(helios.VKEY_UPDATER_ROLE()), initialVkeyUpdater));
 
         // nonVkeyUpdater doesn't have the VKEY_UPDATER_ROLE
         assertFalse(helios.hasRole(helios.VKEY_UPDATER_ROLE(), nonVkeyUpdater));
@@ -438,38 +442,20 @@ contract SP1HeliosTest is Test {
         vm.prank(initialVkeyUpdater);
         helios.updateHeliosProgramVkey(newHeliosProgramVkey);
         assertEq(helios.heliosProgramVkey(), newHeliosProgramVkey);
-    }
 
-    function testVkeyUpdaterRoleTransfer() public {
-        address nonVkeyUpdater = address(0x4);
-        address newVkeyUpdater = address(0x5);
-
-        // nonVkeyUpdater doesn't have the VKEY_UPDATER_ROLE
-        assertFalse(helios.hasRole(helios.VKEY_UPDATER_ROLE(), nonVkeyUpdater));
-
-        // nonVkeyUpdater cannot call transferVkeyUpdaterRole
-        vm.expectRevert(
-            abi.encodeWithSelector(
-                IAccessControl.AccessControlUnauthorizedAccount.selector,
-                nonVkeyUpdater,
-                helios.VKEY_UPDATER_ROLE()
-            )
-        );
-        vm.prank(nonVkeyUpdater);
-        helios.transferVkeyUpdaterRole(nonVkeyUpdater);
-
-        // initialVkeyUpdater can call transferVkeyUpdaterRole
-        vm.prank(initialVkeyUpdater);
-        helios.transferVkeyUpdaterRole(newVkeyUpdater);
+        // initialVkeyUpdater can grant the role to newVkeyUpdater
+        vm.startPrank(initialVkeyUpdater);
+        helios.grantRole(helios.VKEY_UPDATER_ROLE(), newVkeyUpdater);
         assertTrue(helios.hasRole(helios.VKEY_UPDATER_ROLE(), newVkeyUpdater));
-        assertFalse(helios.hasRole(helios.VKEY_UPDATER_ROLE(), initialVkeyUpdater));
+        assertTrue(helios.hasRole(helios.VKEY_UPDATER_ROLE(), initialVkeyUpdater));
+        vm.stopPrank();
 
-        // transferVkeyUpdaterRole cannot be called a second time
-        vm.prank(newVkeyUpdater);
-        vm.expectRevert(
-            abi.encodeWithSelector(SP1Helios.VkeyUpdaterRoleAlreadyTransferred.selector)
-        );
-        helios.transferVkeyUpdaterRole(nonVkeyUpdater);
+        // initialVkeyUpdater can renounce their own role
+        vm.startPrank(initialVkeyUpdater);
+        helios.renounceRole(helios.VKEY_UPDATER_ROLE(), initialVkeyUpdater);
+        assertFalse(helios.hasRole(helios.VKEY_UPDATER_ROLE(), initialVkeyUpdater));
+        assertTrue(helios.hasRole(helios.VKEY_UPDATER_ROLE(), newVkeyUpdater));
+        vm.stopPrank();
     }
 
     function testUpdaterRoleBasedAccessControl() public {
@@ -555,13 +541,13 @@ contract SP1HeliosTest is Test {
         // Create new contract instance
         SP1Helios immutableHelios = new SP1Helios(params);
 
-        // Verify there's no admin for the UPDATER_ROLE
+        // Verify there's no admin for the UPDATER_ROLE (immutable)
         bytes32 adminRole = immutableHelios.getRoleAdmin(immutableHelios.UPDATER_ROLE());
         assertEq(adminRole, bytes32(0)); // No admin role
 
-        // Verify there's no admin for the VKEY_UPDATER_ROLE
+        // Verify VKEY_UPDATER_ROLE is its own admin (can manage itself)
         adminRole = immutableHelios.getRoleAdmin(immutableHelios.VKEY_UPDATER_ROLE());
-        assertEq(adminRole, bytes32(0)); // No admin role
+        assertEq(adminRole, immutableHelios.VKEY_UPDATER_ROLE()); // Self-administered
     }
 
     function testUpdateThroughMultipleSyncCommittees() public {
