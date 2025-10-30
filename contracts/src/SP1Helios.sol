@@ -108,9 +108,7 @@ contract SP1Helios is AccessControlEnumerable {
     /// @param key The storage slot key within the contract.
     /// @param value The verified value of the storage slot.
     /// @param contractAddress The address of the contract whose storage slot was verified.
-    event StorageSlotVerified(
-        uint256 indexed head, bytes32 indexed key, bytes32 value, address contractAddress
-    );
+    event StorageSlotVerified(uint256 indexed head, bytes32 indexed key, bytes32 value, address contractAddress);
 
     /// @notice Emitted during contract initialization when an address is granted the immutable UPDATER_ROLE.
     /// @param updater The address granted the UPDATER_ROLE.
@@ -166,10 +164,7 @@ contract SP1Helios is AccessControlEnumerable {
     /// @dev Verifies an SP1 proof and updates the light client state based on the proof outputs
     /// @param proof The proof bytes for the SP1 proof
     /// @param publicValues The public commitments from the SP1 proof
-    function update(bytes calldata proof, bytes calldata publicValues)
-        external
-        onlyRole(UPDATER_ROLE)
-    {
+    function update(bytes calldata proof, bytes calldata publicValues) external onlyRole(UPDATER_ROLE) {
         // Parse the outputs from the committed public values associated with the proof.
         ProofOutputs memory po = abi.decode(publicValues, (ProofOutputs));
 
@@ -179,15 +174,10 @@ contract SP1Helios is AccessControlEnumerable {
 
         bytes32 storedPrevHeader = headers[fromHead];
         require(storedPrevHeader != bytes32(0), PreviousHeaderNotSet(fromHead));
-        require(
-            storedPrevHeader == po.prevHeader,
-            PreviousHeaderMismatch(po.prevHeader, storedPrevHeader)
-        );
+        require(storedPrevHeader == po.prevHeader, PreviousHeaderMismatch(po.prevHeader, storedPrevHeader));
 
         // Check if the head being proved against is older than allowed.
-        require(
-            block.timestamp - slotTimestamp(fromHead) <= MAX_SLOT_AGE, PreviousHeadTooOld(fromHead)
-        );
+        require(block.timestamp - slotTimestamp(fromHead) <= MAX_SLOT_AGE, PreviousHeadTooOld(fromHead));
 
         uint256 currentPeriod = getSyncCommitteePeriod(fromHead);
 
@@ -250,9 +240,7 @@ contract SP1Helios is AccessControlEnumerable {
 
             // If the next sync committee is already correct, we don't need to update it.
             if (syncCommittees[nextPeriod] != po.nextSyncCommitteeHash) {
-                require(
-                    syncCommittees[nextPeriod] == bytes32(0), SyncCommitteeAlreadySet(nextPeriod)
-                );
+                require(syncCommittees[nextPeriod] == bytes32(0), SyncCommitteeAlreadySet(nextPeriod));
 
                 syncCommittees[nextPeriod] = po.nextSyncCommitteeHash;
                 emit SyncCommitteeUpdate(nextPeriod, po.nextSyncCommitteeHash);
@@ -263,10 +251,7 @@ contract SP1Helios is AccessControlEnumerable {
     /// @notice Updates the helios program vkey
     /// @dev Only callable by the VKEY_UPDATER_ROLE.
     /// @param newHeliosProgramVkey The new helios program vkey
-    function updateHeliosProgramVkey(bytes32 newHeliosProgramVkey)
-        external
-        onlyRole(VKEY_UPDATER_ROLE)
-    {
+    function updateHeliosProgramVkey(bytes32 newHeliosProgramVkey) external onlyRole(VKEY_UPDATER_ROLE) {
         heliosProgramVkey = newHeliosProgramVkey;
 
         emit HeliosProgramVkeyUpdated(newHeliosProgramVkey);
