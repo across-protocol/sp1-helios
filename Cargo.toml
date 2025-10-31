@@ -14,8 +14,8 @@ sp1-helios-primitives = { path = "primitives" }
 # revision used here is the next commit from 0.9.0 release. This is required over 0.9.0 because in
 # 0.9.0 helios-consensus-core bundles some networking features in from alloy as part of alloy's
 # default features: this broke `program/` docker build. See https://github.com/a16z/helios/pull/646
-helios-consensus-core = { git = "https://github.com/a16z/helios", rev = "6a03a343bfad61467b374c361457e2b197092142" }
-helios-ethereum = { git = "https://github.com/a16z/helios", rev = "6a03a343bfad61467b374c361457e2b197092142" }
+helios-consensus-core = { git = "https://github.com/a16z/helios", tag = "0.9.4" }
+helios-ethereum = { git = "https://github.com/a16z/helios", tag = "0.9.4" }
 
 # general
 dotenv = "0.15.0"
@@ -38,13 +38,13 @@ alloy-rlp = { version = "0.3.9", default-features = false, features = [
     "derive",
     "arrayvec",
 ] }
-alloy = { version = "1.0.3", features = ["full"] }
+alloy = { version = "1.0.37", features = ["full"] }
 
 # from alloy-rs/core workspace
 alloy-primitives = "1.0.0"
 alloy-sol-types = "1.0.0"
 
-alloy-trie = { version = "0.9", features = ["ethereum", "serde"] }
+alloy-trie = { version = "0.9.1", features = ["ethereum", "serde"] }
 anyhow = "1.0.86"
 reqwest = "0.12.5"
 tree_hash = "0.10.0"

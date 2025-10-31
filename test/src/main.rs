@@ -28,7 +28,7 @@ async fn main() -> Result<()> {
     // Setup execution RPC client
     let execution_rpc = env::var("SOURCE_EXECUTION_RPC_URL")
         .context("SOURCE_EXECUTION_RPC_URL environment variable not set")?;
-    let provider = ProviderBuilder::new().on_http(execution_rpc.parse()?);
+    let provider = ProviderBuilder::new().connect_http(execution_rpc.parse()?);
 
     let proof = provider
         .get_proof(hub_pool_store_addr, vec![storage_key])
@@ -93,7 +93,7 @@ async fn get_bytes_from_storage_slot(
     // Setup execution RPC client
     let execution_rpc = env::var("SOURCE_EXECUTION_RPC_URL")
         .context("SOURCE_EXECUTION_RPC_URL environment variable not set")?;
-    let provider = ProviderBuilder::new().on_http(execution_rpc.parse()?);
+    let provider = ProviderBuilder::new().connect_http(execution_rpc.parse()?);
 
     // Get storage at slot
     let storage_value = provider
