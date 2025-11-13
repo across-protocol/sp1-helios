@@ -151,7 +151,9 @@ contract SP1Helios is AccessControlEnumerable {
         verifier = params.verifier;
 
         _setRoleAdmin(VKEY_UPDATER_ROLE, VKEY_UPDATER_ROLE);
-        _grantRole(VKEY_UPDATER_ROLE, params.vkeyUpdater);
+        if (params.vkeyUpdater != address(0)) {
+            _grantRole(VKEY_UPDATER_ROLE, params.vkeyUpdater);
+        }
 
         // Make sure at least one updater is provided
         require(params.updaters.length > 0, NoUpdatersProvided());
