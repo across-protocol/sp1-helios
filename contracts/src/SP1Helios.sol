@@ -25,10 +25,13 @@ contract SP1Helios is AccessControlEnumerable {
     uint256 public immutable SLOTS_PER_EPOCH;
 
     /// @notice Role for updater operations
-    bytes32 public constant UPDATER_ROLE = keccak256("UPDATER_ROLE");
+    bytes32 public constant STATE_UPDATER_ROLE = keccak256("STATE_UPDATER_ROLE");
 
     /// @notice Role for updating VKEY
     bytes32 public constant VKEY_UPDATER_ROLE = keccak256("VKEY_UPDATER_ROLE");
+
+    /// @notice Role for adding / removing updaters
+    bytes32 public constant UPDATERS_ADMIN_ROLE = keccak256("UPDATERS_ADMIN_ROLE");
 
     /// @notice Maximum number of time behind current timestamp for a block to be used for proving
     /// @dev This is set to 1 week to prevent timing attacks where malicious validators
@@ -112,10 +115,6 @@ contract SP1Helios is AccessControlEnumerable {
         uint256 indexed head, bytes32 indexed key, bytes32 value, address contractAddress
     );
 
-    /// @notice Emitted during contract initialization when an address is granted the immutable UPDATER_ROLE.
-    /// @param updater The address granted the UPDATER_ROLE.
-    event UpdaterAdded(address indexed updater);
-
     /// @notice Emitted when the helios program vkey is updated.
     /// @param newHeliosProgramVkey The new helios program vkey.
     event HeliosProgramVkeyUpdated(bytes32 indexed newHeliosProgramVkey);
@@ -145,19 +144,21 @@ contract SP1Helios is AccessControlEnumerable {
         head = params.head;
         verifier = params.verifier;
 
-        // Set VKEY_UPDATER_ROLE as its own admin so it can grant/revoke itself
-        _setRoleAdmin(VKEY_UPDATER_ROLE, VKEY_UPDATER_ROLE);
-        _grantRole(VKEY_UPDATER_ROLE, params.vkeyUpdater);
+        _setRoleAdmin(VKEY_UPDATER_ROLE, UPDATERS_ADMIN_ROLE);
+        _setRoleAdmin(STATE_UPDATER_ROLE, UPDATERS_ADMIN_ROLE);
 
-        // Make sure at least one updater is provided
-        require(params.updaters.length > 0, NoUpdatersProvided());
+        // msg.sender is responsible for transferring `UPDATERS_ADMIN_ROLE` to the SpokePool after
+        // its creation
+        _grantRole(UPDATERS_ADMIN_ROLE, msg.sender);
 
-        // Add all updaters
+        if (params.vkeyUpdater != address(0)) {
+            _grantRole(VKEY_UPDATER_ROLE, params.vkeyUpdater);
+        }
+
         for (uint256 i = 0; i < params.updaters.length; ++i) {
             address updater = params.updaters[i];
             if (updater != address(0)) {
-                _grantRole(UPDATER_ROLE, updater);
-                emit UpdaterAdded(updater);
+                _grantRole(STATE_UPDATER_ROLE, updater);
             }
         }
     }
@@ -168,7 +169,7 @@ contract SP1Helios is AccessControlEnumerable {
     /// @param publicValues The public commitments from the SP1 proof
     function update(bytes calldata proof, bytes calldata publicValues)
         external
-        onlyRole(UPDATER_ROLE)
+        onlyRole(STATE_UPDATER_ROLE)
     {
         // Parse the outputs from the committed public values associated with the proof.
         ProofOutputs memory po = abi.decode(publicValues, (ProofOutputs));
