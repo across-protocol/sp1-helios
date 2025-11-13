@@ -11,10 +11,10 @@ import {AccessControlEnumerable} from "@openzeppelin/access/extensions/AccessCon
 /// It also provides functionality to verify and store Ethereum storage slot values.
 /// @dev `UPDATER_ROLE` permissions are fixed at contract creation time and cannot be modified afterward.
 /// @dev `VKEY_UPDATER_ROLE` is its own admin and any member can add / remove other members.
-/// SpokePool is meant to have the `VKEY_UPDATER_ROLE`. Having `VKEY_UPDATER_ROLE` be its own
-/// admin allows us to deploy SP1Helios first -> then deploy the SpokePool and after grant
-/// the `VKEY_UPDATER_ROLE` to the SpokePool. SpokePool can also "transfer" the role to the
-/// new SpokePool if there's ever a SpokePool migration
+/// Operationally, making `VKEY_UPDATER_ROLE` its own admin is convenient for a deployer, who can
+/// transfer (grant + revoke self) the role to the SpokePool (address of which might not be known
+/// at Sp1Helios contract deployment), which can then be a trusted role admin by accepting admin
+/// calls from the HubPool.
 /// @custom:security-contact bugs@across.to
 contract SP1Helios is AccessControlEnumerable {
     /// @notice The timestamp at which the beacon chain genesis block was processed
