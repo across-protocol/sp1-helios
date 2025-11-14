@@ -117,8 +117,11 @@ contract SP1Helios is AccessControlEnumerable {
     event UpdaterAdded(address indexed updater);
 
     /// @notice Emitted when the helios program vkey is updated.
+    /// @param oldHeliosProgramVkey The old helios program vkey.
     /// @param newHeliosProgramVkey The new helios program vkey.
-    event HeliosProgramVkeyUpdated(bytes32 indexed newHeliosProgramVkey);
+    event HeliosProgramVkeyUpdated(
+        bytes32 indexed oldHeliosProgramVkey, bytes32 indexed newHeliosProgramVkey
+    );
 
     error NonIncreasingHead(uint256 slot);
     error SyncCommitteeAlreadySet(uint256 period);
@@ -267,9 +270,10 @@ contract SP1Helios is AccessControlEnumerable {
         external
         onlyRole(VKEY_UPDATER_ROLE)
     {
+        bytes32 oldHeliosProgramVkey = heliosProgramVkey;
         heliosProgramVkey = newHeliosProgramVkey;
 
-        emit HeliosProgramVkeyUpdated(newHeliosProgramVkey);
+        emit HeliosProgramVkeyUpdated(oldHeliosProgramVkey, newHeliosProgramVkey);
     }
 
     /// @notice Gets the sync committee period from a slot
