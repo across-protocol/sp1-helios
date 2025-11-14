@@ -147,6 +147,9 @@ contract SP1Helios is AccessControlEnumerable {
 
         _setRoleAdmin(VKEY_UPDATER_ROLE, UPDATERS_ADMIN_ROLE);
         _setRoleAdmin(STATE_UPDATER_ROLE, UPDATERS_ADMIN_ROLE);
+        // `UPDATERS_ADMIN_ROLE` is self-administered to allow transfers from deployer to Spoke and
+        // to allow the SpokePool to transfer it if ever required
+        _setRoleAdmin(UPDATERS_ADMIN_ROLE, UPDATERS_ADMIN_ROLE);
 
         // msg.sender is responsible for transferring `UPDATERS_ADMIN_ROLE` to the SpokePool after
         // its creation
