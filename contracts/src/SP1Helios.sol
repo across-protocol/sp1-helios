@@ -9,7 +9,9 @@ import {AccessControlEnumerable} from "@openzeppelin/access/extensions/AccessCon
 /// @dev This contract uses SP1 zero-knowledge proofs to verify updates to the Ethereum beacon chain state.
 /// The contract stores the latest verified beacon chain header, execution state root, and sync committee information.
 /// It also provides functionality to verify and store Ethereum storage slot values.
-/// Updater permissions are fixed at contract creation time and cannot be modified afterward.
+/// @dev `UPDATERS_ADMIN_ROLE` is responsible for managing both the `STATE_UPDATER_ROLE` and `VKEY_UPDATER_ROLE`
+/// membership. It can be given to SpokePool, which will then control the memberships by receiving
+/// admin actions from the HubPool.
 /// @custom:security-contact bugs@across.to
 contract SP1Helios is AccessControlEnumerable {
     /// @notice The timestamp at which the beacon chain genesis block was processed
@@ -127,7 +129,6 @@ contract SP1Helios is AccessControlEnumerable {
     error PreviousHeaderNotSet(uint256 slot);
     error PreviousHeaderMismatch(bytes32 given, bytes32 expected);
     error PreviousHeadTooOld(uint256 slot);
-    error NoUpdatersProvided();
 
     /// @notice Initializes the SP1Helios contract with the provided parameters
     /// @dev Sets up immutable contract state and grants the UPDATER_ROLE to the provided updaters
