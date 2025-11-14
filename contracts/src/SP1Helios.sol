@@ -9,7 +9,7 @@ import {AccessControlEnumerable} from "@openzeppelin/access/extensions/AccessCon
 /// @dev This contract uses SP1 zero-knowledge proofs to verify updates to the Ethereum beacon chain state.
 /// The contract stores the latest verified beacon chain header, execution state root, and sync committee information.
 /// It also provides functionality to verify and store Ethereum storage slot values.
-/// @dev `UPDATERS_ADMIN_ROLE` is responsible for managing both the `STATE_UPDATER_ROLE` and `VKEY_UPDATER_ROLE`
+/// @dev `DEFAULT_ADMIN_ROLE` is responsible for managing both the `STATE_UPDATER_ROLE` and `VKEY_UPDATER_ROLE`
 /// membership. It can be given to SpokePool, which will then control the memberships by receiving
 /// admin actions from the HubPool.
 /// @custom:security-contact bugs@across.to
@@ -31,9 +31,6 @@ contract SP1Helios is AccessControlEnumerable {
 
     /// @notice Role for updating VKEY
     bytes32 public constant VKEY_UPDATER_ROLE = keccak256("VKEY_UPDATER_ROLE");
-
-    /// @notice Role for adding / removing updaters
-    bytes32 public constant UPDATERS_ADMIN_ROLE = keccak256("UPDATERS_ADMIN_ROLE");
 
     /// @notice Maximum number of time behind current timestamp for a block to be used for proving
     /// @dev This is set to 1 week to prevent timing attacks where malicious validators
@@ -132,7 +129,7 @@ contract SP1Helios is AccessControlEnumerable {
 
     /// @notice Initializes the SP1Helios contract with the provided parameters
     /// @dev Sets up immutable contract state and grants roles:
-    /// - `UPDATERS_ADMIN_ROLE` to `msg.sender`
+    /// - `DEFAULT_ADMIN_ROLE` to `msg.sender`
     /// - `VKEY_UPDATER_ROLE` to the configured vkey updater (if non-zero)
     /// - `STATE_UPDATER_ROLE` to each configured state updater
     /// @param params The initialization parameters
@@ -148,15 +145,9 @@ contract SP1Helios is AccessControlEnumerable {
         head = params.head;
         verifier = params.verifier;
 
-        _setRoleAdmin(VKEY_UPDATER_ROLE, UPDATERS_ADMIN_ROLE);
-        _setRoleAdmin(STATE_UPDATER_ROLE, UPDATERS_ADMIN_ROLE);
-        // `UPDATERS_ADMIN_ROLE` is self-administered to allow transfers from deployer to Spoke and
-        // to allow the SpokePool to transfer it if ever required
-        _setRoleAdmin(UPDATERS_ADMIN_ROLE, UPDATERS_ADMIN_ROLE);
-
-        // msg.sender is responsible for transferring `UPDATERS_ADMIN_ROLE` to the SpokePool after
+        // msg.sender is responsible for transferring `DEFAULT_ADMIN_ROLE` to the SpokePool after
         // its creation
-        _grantRole(UPDATERS_ADMIN_ROLE, msg.sender);
+        _grantRole(DEFAULT_ADMIN_ROLE, msg.sender);
 
         if (params.vkeyUpdater != address(0)) {
             _grantRole(VKEY_UPDATER_ROLE, params.vkeyUpdater);

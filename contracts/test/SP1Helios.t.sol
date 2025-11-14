@@ -418,15 +418,15 @@ contract SP1HeliosTest is Test {
         address newVkeyUpdater = address(0x5);
 
         // Cache role identifiers to avoid static calls after expectRevert
-        bytes32 UPDATERS_ADMIN_ROLE = helios.UPDATERS_ADMIN_ROLE();
+        bytes32 DEFAULT_ADMIN_ROLE = helios.DEFAULT_ADMIN_ROLE();
         bytes32 VKEY_UPDATER_ROLE = helios.VKEY_UPDATER_ROLE();
 
         // initialVkeyUpdater has the VKEY_UPDATER_ROLE
         assertTrue(helios.hasRole(VKEY_UPDATER_ROLE, initialVkeyUpdater));
 
-        // VKEY_UPDATER_ROLE is admined by UPDATERS_ADMIN_ROLE, held by deployer (this contract)
-        assertEq(helios.getRoleAdmin(VKEY_UPDATER_ROLE), UPDATERS_ADMIN_ROLE);
-        assertTrue(helios.hasRole(UPDATERS_ADMIN_ROLE, address(this)));
+        // VKEY_UPDATER_ROLE is admined by DEFAULT_ADMIN_ROLE, held by deployer (this contract)
+        assertEq(helios.getRoleAdmin(VKEY_UPDATER_ROLE), DEFAULT_ADMIN_ROLE);
+        assertTrue(helios.hasRole(DEFAULT_ADMIN_ROLE, address(this)));
 
         // nonVkeyUpdater doesn't have the VKEY_UPDATER_ROLE
         assertFalse(helios.hasRole(VKEY_UPDATER_ROLE, nonVkeyUpdater));
@@ -456,7 +456,7 @@ contract SP1HeliosTest is Test {
             abi.encodeWithSelector(
                 IAccessControl.AccessControlUnauthorizedAccount.selector,
                 initialVkeyUpdater,
-                UPDATERS_ADMIN_ROLE
+                DEFAULT_ADMIN_ROLE
             )
         );
         helios.grantRole(VKEY_UPDATER_ROLE, newVkeyUpdater);
@@ -533,13 +533,13 @@ contract SP1HeliosTest is Test {
         );
         assertEq(
             noUpdaterHelios.getRoleAdmin(noUpdaterHelios.STATE_UPDATER_ROLE()),
-            noUpdaterHelios.UPDATERS_ADMIN_ROLE(),
-            "STATE_UPDATER_ROLE admin should be UPDATERS_ADMIN_ROLE"
+            noUpdaterHelios.DEFAULT_ADMIN_ROLE(),
+            "STATE_UPDATER_ROLE admin should be DEFAULT_ADMIN_ROLE"
         );
         assertEq(
             noUpdaterHelios.getRoleAdmin(noUpdaterHelios.VKEY_UPDATER_ROLE()),
-            noUpdaterHelios.UPDATERS_ADMIN_ROLE(),
-            "VKEY_UPDATER_ROLE admin should be UPDATERS_ADMIN_ROLE"
+            noUpdaterHelios.DEFAULT_ADMIN_ROLE(),
+            "VKEY_UPDATER_ROLE admin should be DEFAULT_ADMIN_ROLE"
         );
     }
 
@@ -571,17 +571,17 @@ contract SP1HeliosTest is Test {
         // Create new contract instance
         SP1Helios immutableHelios = new SP1Helios(params);
 
-        // Verify STATE_UPDATER_ROLE is admined by UPDATERS_ADMIN_ROLE
+        // Verify STATE_UPDATER_ROLE is admined by DEFAULT_ADMIN_ROLE
         bytes32 adminRole = immutableHelios.getRoleAdmin(immutableHelios.STATE_UPDATER_ROLE());
-        assertEq(adminRole, immutableHelios.UPDATERS_ADMIN_ROLE());
+        assertEq(adminRole, immutableHelios.DEFAULT_ADMIN_ROLE());
 
-        // Verify VKEY_UPDATER_ROLE is admined by UPDATERS_ADMIN_ROLE
+        // Verify VKEY_UPDATER_ROLE is admined by DEFAULT_ADMIN_ROLE
         adminRole = immutableHelios.getRoleAdmin(immutableHelios.VKEY_UPDATER_ROLE());
-        assertEq(adminRole, immutableHelios.UPDATERS_ADMIN_ROLE());
+        assertEq(adminRole, immutableHelios.DEFAULT_ADMIN_ROLE());
 
-        // Verify UPDATERS_ADMIN_ROLE is self-admin
-        adminRole = immutableHelios.getRoleAdmin(immutableHelios.UPDATERS_ADMIN_ROLE());
-        assertEq(adminRole, immutableHelios.UPDATERS_ADMIN_ROLE());
+        // Verify DEFAULT_ADMIN_ROLE is self-admin
+        adminRole = immutableHelios.getRoleAdmin(immutableHelios.DEFAULT_ADMIN_ROLE());
+        assertEq(adminRole, immutableHelios.DEFAULT_ADMIN_ROLE());
     }
 
     function testUpdateThroughMultipleSyncCommittees() public {
