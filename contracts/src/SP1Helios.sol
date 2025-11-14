@@ -2,9 +2,7 @@
 pragma solidity 0.8.28;
 
 import {ISP1Verifier} from "@sp1-contracts/ISP1Verifier.sol";
-import {
-    AccessControlEnumerable
-} from "@openzeppelin/access/extensions/AccessControlEnumerable.sol";
+import {AccessControlEnumerable} from "@openzeppelin/access/extensions/AccessControlEnumerable.sol";
 
 /// @title SP1Helios
 /// @notice An Ethereum beacon chain light client, built with SP1 and Helios.
@@ -29,15 +27,13 @@ contract SP1Helios is AccessControlEnumerable {
     uint256 public immutable SLOTS_PER_EPOCH;
 
     /// @notice Role for updater operations
-    bytes32 public constant STATE_UPDATER_ROLE =
-        keccak256("STATE_UPDATER_ROLE");
+    bytes32 public constant STATE_UPDATER_ROLE = keccak256("STATE_UPDATER_ROLE");
 
     /// @notice Role for updating VKEY
     bytes32 public constant VKEY_UPDATER_ROLE = keccak256("VKEY_UPDATER_ROLE");
 
     /// @notice Role for adding / removing updaters
-    bytes32 public constant UPDATERS_ADMIN_ROLE =
-        keccak256("UPDATERS_ADMIN_ROLE");
+    bytes32 public constant UPDATERS_ADMIN_ROLE = keccak256("UPDATERS_ADMIN_ROLE");
 
     /// @notice Maximum number of time behind current timestamp for a block to be used for proving
     /// @dev This is set to 1 week to prevent timing attacks where malicious validators
@@ -52,16 +48,13 @@ contract SP1Helios is AccessControlEnumerable {
     mapping(uint256 beaconSlot => bytes32 beaconHeaderRoot) public headers;
 
     /// @notice Maps from a slot to the current finalized execution state root
-    mapping(uint256 beaconSlot => bytes32 executionStateRoot)
-        public executionStateRoots;
+    mapping(uint256 beaconSlot => bytes32 executionStateRoot) public executionStateRoots;
 
     /// @notice Maps from a period to the hash for the sync committee
-    mapping(uint256 syncCommitteePeriod => bytes32 syncCommitteeHash)
-        public syncCommittees;
+    mapping(uint256 syncCommitteePeriod => bytes32 syncCommitteeHash) public syncCommittees;
 
     /// @notice Maps from `computeStorageKey(beaconSlot, contract, storageSlot)` tuple to storage value
-    mapping(bytes32 computedStorageKey => bytes32 storageValue)
-        public storageValues;
+    mapping(bytes32 computedStorageKey => bytes32 storageValue) public storageValues;
 
     /// @notice The verification key for the SP1 Helios program
     bytes32 public heliosProgramVkey;
@@ -121,10 +114,7 @@ contract SP1Helios is AccessControlEnumerable {
     /// @param value The verified value of the storage slot.
     /// @param contractAddress The address of the contract whose storage slot was verified.
     event StorageSlotVerified(
-        uint256 indexed head,
-        bytes32 indexed key,
-        bytes32 value,
-        address contractAddress
+        uint256 indexed head, bytes32 indexed key, bytes32 value, address contractAddress
     );
 
     /// @notice Emitted when the helios program vkey is updated.
@@ -151,8 +141,7 @@ contract SP1Helios is AccessControlEnumerable {
         SECONDS_PER_SLOT = params.secondsPerSlot;
         SLOTS_PER_PERIOD = params.slotsPerPeriod;
         SLOTS_PER_EPOCH = params.slotsPerEpoch;
-        syncCommittees[getSyncCommitteePeriod(params.head)] = params
-            .syncCommitteeHash;
+        syncCommittees[getSyncCommitteePeriod(params.head)] = params.syncCommitteeHash;
         heliosProgramVkey = params.heliosProgramVkey;
         headers[params.head] = params.header;
         executionStateRoots[params.head] = params.executionStateRoot;
@@ -185,10 +174,10 @@ contract SP1Helios is AccessControlEnumerable {
     /// @dev Verifies an SP1 proof and updates the light client state based on the proof outputs
     /// @param proof The proof bytes for the SP1 proof
     /// @param publicValues The public commitments from the SP1 proof
-    function update(
-        bytes calldata proof,
-        bytes calldata publicValues
-    ) external onlyRole(STATE_UPDATER_ROLE) {
+    function update(bytes calldata proof, bytes calldata publicValues)
+        external
+        onlyRole(STATE_UPDATER_ROLE)
+    {
         // Parse the outputs from the committed public values associated with the proof.
         ProofOutputs memory po = abi.decode(publicValues, (ProofOutputs));
 
@@ -205,8 +194,7 @@ contract SP1Helios is AccessControlEnumerable {
 
         // Check if the head being proved against is older than allowed.
         require(
-            block.timestamp - slotTimestamp(fromHead) <= MAX_SLOT_AGE,
-            PreviousHeadTooOld(fromHead)
+            block.timestamp - slotTimestamp(fromHead) <= MAX_SLOT_AGE, PreviousHeadTooOld(fromHead)
         );
 
         uint256 currentPeriod = getSyncCommitteePeriod(fromHead);
@@ -216,18 +204,11 @@ contract SP1Helios is AccessControlEnumerable {
         bytes32 currentSyncCommitteeHash = syncCommittees[currentPeriod];
         require(
             currentSyncCommitteeHash == po.startSyncCommitteeHash,
-            SyncCommitteeStartMismatch(
-                po.startSyncCommitteeHash,
-                currentSyncCommitteeHash
-            )
+            SyncCommitteeStartMismatch(po.startSyncCommitteeHash, currentSyncCommitteeHash)
         );
 
         // Verify the proof with the associated public values. This will revert if proof invalid.
-        ISP1Verifier(verifier).verifyProof(
-            heliosProgramVkey,
-            publicValues,
-            proof
-        );
+        ISP1Verifier(verifier).verifyProof(heliosProgramVkey, publicValues, proof);
 
         // If the header has not been set yet, set it. Otherwise, check that po.newHeader matches the stored one
         bytes32 storedNewHeader = headers[po.newHead];
@@ -256,18 +237,9 @@ contract SP1Helios is AccessControlEnumerable {
         // Store all provided storage slot values
         for (uint256 i = 0; i < po.slots.length; ++i) {
             StorageSlot memory slot = po.slots[i];
-            bytes32 storageKey = computeStorageKey(
-                po.newHead,
-                slot.contractAddress,
-                slot.key
-            );
+            bytes32 storageKey = computeStorageKey(po.newHead, slot.contractAddress, slot.key);
             storageValues[storageKey] = slot.value;
-            emit StorageSlotVerified(
-                po.newHead,
-                slot.key,
-                slot.value,
-                slot.contractAddress
-            );
+            emit StorageSlotVerified(po.newHead, slot.key, slot.value, slot.contractAddress);
         }
 
         uint256 newPeriod = getSyncCommitteePeriod(po.newHead);
@@ -287,8 +259,7 @@ contract SP1Helios is AccessControlEnumerable {
             // If the next sync committee is already correct, we don't need to update it.
             if (syncCommittees[nextPeriod] != po.nextSyncCommitteeHash) {
                 require(
-                    syncCommittees[nextPeriod] == bytes32(0),
-                    SyncCommitteeAlreadySet(nextPeriod)
+                    syncCommittees[nextPeriod] == bytes32(0), SyncCommitteeAlreadySet(nextPeriod)
                 );
 
                 syncCommittees[nextPeriod] = po.nextSyncCommitteeHash;
@@ -300,9 +271,10 @@ contract SP1Helios is AccessControlEnumerable {
     /// @notice Updates the helios program vkey
     /// @dev Only callable by the VKEY_UPDATER_ROLE.
     /// @param newHeliosProgramVkey The new helios program vkey
-    function updateHeliosProgramVkey(
-        bytes32 newHeliosProgramVkey
-    ) external onlyRole(VKEY_UPDATER_ROLE) {
+    function updateHeliosProgramVkey(bytes32 newHeliosProgramVkey)
+        external
+        onlyRole(VKEY_UPDATER_ROLE)
+    {
         heliosProgramVkey = newHeliosProgramVkey;
 
         emit HeliosProgramVkeyUpdated(newHeliosProgramVkey);
@@ -312,9 +284,7 @@ contract SP1Helios is AccessControlEnumerable {
     /// @dev A sync committee period consists of 8192 slots (256 epochs)
     /// @param slot The slot number to get the period for
     /// @return The sync committee period number
-    function getSyncCommitteePeriod(
-        uint256 slot
-    ) public view returns (uint256) {
+    function getSyncCommitteePeriod(uint256 slot) public view returns (uint256) {
         return slot / SLOTS_PER_PERIOD;
     }
 
@@ -346,15 +316,12 @@ contract SP1Helios is AccessControlEnumerable {
     /// @param contractAddress The address of the contract containing the storage slot
     /// @param storageSlot The storage slot key
     /// @return A unique key for looking up the storage value
-    function computeStorageKey(
-        uint256 beaconSlot,
-        address contractAddress,
-        bytes32 storageSlot
-    ) public pure returns (bytes32) {
-        return
-            keccak256(
-                abi.encodePacked(beaconSlot, contractAddress, storageSlot)
-            );
+    function computeStorageKey(uint256 beaconSlot, address contractAddress, bytes32 storageSlot)
+        public
+        pure
+        returns (bytes32)
+    {
+        return keccak256(abi.encodePacked(beaconSlot, contractAddress, storageSlot));
     }
 
     /// @notice Gets the value of a storage slot at a specific block
@@ -363,14 +330,11 @@ contract SP1Helios is AccessControlEnumerable {
     /// @param contractAddress The address of the contract containing the storage slot
     /// @param storageSlot The storage slot key
     /// @return The value of the storage slot, or zero if not found
-    function getStorageSlot(
-        uint256 beaconSlot,
-        address contractAddress,
-        bytes32 storageSlot
-    ) external view returns (bytes32) {
-        return
-            storageValues[
-                computeStorageKey(beaconSlot, contractAddress, storageSlot)
-            ];
+    function getStorageSlot(uint256 beaconSlot, address contractAddress, bytes32 storageSlot)
+        external
+        view
+        returns (bytes32)
+    {
+        return storageValues[computeStorageKey(beaconSlot, contractAddress, storageSlot)];
     }
 }
