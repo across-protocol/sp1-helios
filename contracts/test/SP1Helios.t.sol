@@ -675,8 +675,7 @@ contract SP1HeliosTest is Test {
     function performSecondUpdate(
         uint256 prevHead,
         bytes32 prevHeader,
-        bytes32,
-        /* prevSyncCommitteeHash */
+        bytes32, /* prevSyncCommitteeHash */
         uint256 newHead,
         bytes32 newHeader,
         bytes32 newExecutionStateRoot,
@@ -694,7 +693,7 @@ contract SP1HeliosTest is Test {
             prevHeader: prevHeader,
             prevHead: prevHead,
             syncCommitteeHash: newSyncCommitteeHash,
-            startSyncCommitteeHash: helios.syncCommittees(helios.getSyncCommitteePeriod(prevHead)),
+            startSyncCommitteeHash: INITIAL_SYNC_COMMITTEE_HASH,
             slots: emptySlots
         });
 
