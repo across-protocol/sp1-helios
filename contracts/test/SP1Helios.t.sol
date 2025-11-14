@@ -693,7 +693,7 @@ contract SP1HeliosTest is Test {
             prevHeader: prevHeader,
             prevHead: prevHead,
             syncCommitteeHash: newSyncCommitteeHash,
-            startSyncCommitteeHash: INITIAL_SYNC_COMMITTEE_HASH,
+            startSyncCommitteeHash: INITIAL_SYNC_COMMITTEE_HASH, // This must match the sync committee from the initial setup
             slots: emptySlots
         });
 
