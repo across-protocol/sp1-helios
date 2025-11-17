@@ -7,6 +7,7 @@ use helios_consensus_core::consensus_spec::MainnetConsensusSpec;
 use serde::{Deserialize, Serialize};
 use sp1_helios_script::{get_checkpoint, get_client, get_latest_checkpoint, rpc_proxies};
 use sp1_sdk::{utils, HashableKey, Prover, ProverClient};
+use std::default::Default;
 use std::{
     env, fs,
     path::{Path, PathBuf},
@@ -16,15 +17,39 @@ use tree_hash::TreeHash;
 const HELIOS_ELF: &[u8] = include_bytes!("../../elf/sp1-helios-elf");
 
 #[derive(Parser, Debug, Clone)]
-#[command(about = "Get the genesis parameters from a block.")]
+#[command(
+    name = "genesis",
+    version,
+    about = "Get the genesis parameters from a block.",
+    long_about = None,
+    // A man-ish help layout
+    help_template = "\
+{name} — {about}
+
+USAGE:
+  {usage}
+
+OPTIONS:
+{all-args}
+
+EXAMPLES:
+  genesis --slot 12345 --env-file .env.local --out ./contracts
+"
+)]
 pub struct GenesisArgs {
-    #[arg(long)]
+    #[arg(long, help = "The slot to get the genesis parameters from")]
     pub slot: Option<u64>,
-    #[arg(long, default_value = ".env")]
+    #[arg(long, default_value = ".env", help = "The .env file to use")]
     pub env_file: String,
+    #[arg(
+        long,
+        default_value = "contracts",
+        help = "The output directory for the genesis.json file"
+    )]
+    pub out: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct GenesisConfig {
     pub execution_state_root: String,
@@ -67,11 +92,14 @@ pub async fn main() -> Result<()> {
     } else {
         checkpoint = get_latest_checkpoint().await;
     }
-    let sp1_prover = env::var("SP1_PROVER").unwrap();
+    let sp1_prover = env::var("SP1_PROVER").expect("SP1_PROVER not set in .env file");
 
     let mut verifier = Address::ZERO;
     if sp1_prover != "mock" {
-        verifier = env::var("SP1_VERIFIER_ADDRESS").unwrap().parse().unwrap();
+        verifier = env::var("SP1_VERIFIER_ADDRESS")
+            .expect("SP1_VERIFIER_ADDRESS not set in .env file")
+            .parse()
+            .expect("Failed to parse SP1_VERIFIER_ADDRESS");
     }
 
     let mut vkey_updater = Address::ZERO;
@@ -108,7 +136,7 @@ pub async fn main() -> Result<()> {
     );
 
     // Read the Genesis config from the contracts directory.
-    let mut genesis_config = get_existing_genesis_config(&workspace_root)?;
+    let mut genesis_config: GenesisConfig = GenesisConfig::default();
 
     genesis_config.genesis_time = genesis_time;
     genesis_config.seconds_per_slot = SECONDS_PER_SLOT;
@@ -158,7 +186,7 @@ pub async fn main() -> Result<()> {
 
     genesis_config.updaters = updaters;
 
-    write_genesis_config(&workspace_root, &genesis_config)?;
+    write_genesis_config(&workspace_root, &genesis_config, args.out)?;
 
     Ok(())
 }
@@ -173,17 +201,13 @@ fn find_project_root() -> Option<PathBuf> {
     Some(path)
 }
 
-/// Get the existing genesis config from the contracts directory.
-fn get_existing_genesis_config(workspace_root: &Path) -> Result<GenesisConfig> {
-    let genesis_config_path = workspace_root.join("contracts").join("genesis.json");
-    let genesis_config_content = std::fs::read_to_string(genesis_config_path)?;
-    let genesis_config: GenesisConfig = serde_json::from_str(&genesis_config_content)?;
-    Ok(genesis_config)
-}
-
 /// Write the genesis config to the contracts directory.
-fn write_genesis_config(workspace_root: &Path, genesis_config: &GenesisConfig) -> Result<()> {
-    let genesis_config_path = workspace_root.join("contracts").join("genesis.json");
+fn write_genesis_config(
+    workspace_root: &Path,
+    genesis_config: &GenesisConfig,
+    out: String,
+) -> Result<()> {
+    let genesis_config_path = workspace_root.join(out).join("genesis.json");
     fs::write(
         genesis_config_path,
         serde_json::to_string_pretty(&genesis_config)?,
