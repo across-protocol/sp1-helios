@@ -49,6 +49,7 @@ contract DeployScript is Script {
         params.slotsPerPeriod = vm.parseJsonUint(json, ".slotsPerPeriod");
         params.syncCommitteeHash = vm.parseJsonBytes32(json, ".syncCommitteeHash");
         params.verifier = vm.parseJsonAddress(json, ".verifier");
+        params.vkeyUpdater = vm.parseJsonAddress(json, ".vkeyUpdater");
         params.updaters = vm.parseJsonAddressArray(json, ".updaters");
     }
 
