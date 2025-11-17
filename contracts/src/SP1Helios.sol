@@ -129,6 +129,7 @@ contract SP1Helios is AccessControlEnumerable {
     error PreviousHeaderNotSet(uint256 slot);
     error PreviousHeaderMismatch(bytes32 given, bytes32 expected);
     error PreviousHeadTooOld(uint256 slot);
+    error VkeyNotChanged(bytes32 vkey);
 
     /// @notice Initializes the SP1Helios contract with the provided parameters
     /// @dev Sets up immutable contract state and grants roles:
@@ -271,6 +272,8 @@ contract SP1Helios is AccessControlEnumerable {
     {
         bytes32 oldHeliosProgramVkey = heliosProgramVkey;
         heliosProgramVkey = newHeliosProgramVkey;
+
+        require(oldHeliosProgramVkey != newHeliosProgramVkey, VkeyNotChanged(newHeliosProgramVkey));
 
         emit HeliosProgramVkeyUpdated(oldHeliosProgramVkey, newHeliosProgramVkey);
     }
