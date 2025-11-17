@@ -13,6 +13,7 @@ evm_version = "prague"
 bsc = "${NODE_URL_56}"
 hyperevm = "${NODE_URL_999}"
 plasma = "${NODE_URL_9745}"
+monad = "${NODE_URL_143}"
 
 [etherscan]
 ethereum = { key = "${ETHERSCAN_API_KEY}" }
