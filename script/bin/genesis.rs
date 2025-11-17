@@ -37,6 +37,7 @@ pub struct GenesisConfig {
     pub slots_per_period: u64,
     pub sync_committee_hash: String,
     pub verifier: String,
+    pub vkey_updater: String,
     pub updaters: Vec<String>,
 }
 
@@ -71,6 +72,11 @@ pub async fn main() -> Result<()> {
     let mut verifier = Address::ZERO;
     if sp1_prover != "mock" {
         verifier = env::var("SP1_VERIFIER_ADDRESS").unwrap().parse().unwrap();
+    }
+
+    let mut vkey_updater = Address::ZERO;
+    if sp1_prover != "mock" {
+        vkey_updater = env::var("VKEY_UPDATER").unwrap().parse().unwrap();
     }
 
     let helios_client =
@@ -122,7 +128,8 @@ pub async fn main() -> Result<()> {
     genesis_config.head = head;
     genesis_config.helios_program_vkey = vk.bytes32();
     genesis_config.verifier = format!("0x{:x}", verifier);
-
+    genesis_config.vkey_updater = format!("0x{:x}", vkey_updater);
+    
     // Get the account associated with the private key.
     let private_key = env::var("PRIVATE_KEY").unwrap();
     let signer: PrivateKeySigner = private_key.parse().expect("Failed to parse private key");
