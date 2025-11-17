@@ -9,7 +9,9 @@ import {AccessControlEnumerable} from "@openzeppelin/access/extensions/AccessCon
 /// @dev This contract uses SP1 zero-knowledge proofs to verify updates to the Ethereum beacon chain state.
 /// The contract stores the latest verified beacon chain header, execution state root, and sync committee information.
 /// It also provides functionality to verify and store Ethereum storage slot values.
-/// Updater permissions are fixed at contract creation time and cannot be modified afterward.
+/// @dev `DEFAULT_ADMIN_ROLE` is responsible for managing both the `STATE_UPDATER_ROLE` and `VKEY_UPDATER_ROLE`
+/// membership. It can be given to SpokePool, which will then control the memberships by receiving
+/// admin actions from the HubPool.
 /// @custom:security-contact bugs@across.to
 contract SP1Helios is AccessControlEnumerable {
     /// @notice The timestamp at which the beacon chain genesis block was processed
@@ -25,7 +27,7 @@ contract SP1Helios is AccessControlEnumerable {
     uint256 public immutable SLOTS_PER_EPOCH;
 
     /// @notice Role for updater operations
-    bytes32 public constant UPDATER_ROLE = keccak256("UPDATER_ROLE");
+    bytes32 public constant STATE_UPDATER_ROLE = keccak256("STATE_UPDATER_ROLE");
 
     /// @notice Role for updating VKEY
     bytes32 public constant VKEY_UPDATER_ROLE = keccak256("VKEY_UPDATER_ROLE");
@@ -112,10 +114,6 @@ contract SP1Helios is AccessControlEnumerable {
         uint256 indexed head, bytes32 indexed key, bytes32 value, address contractAddress
     );
 
-    /// @notice Emitted during contract initialization when an address is granted the immutable UPDATER_ROLE.
-    /// @param updater The address granted the UPDATER_ROLE.
-    event UpdaterAdded(address indexed updater);
-
     /// @notice Emitted when the helios program vkey is updated.
     /// @param oldHeliosProgramVkey The old helios program vkey.
     /// @param newHeliosProgramVkey The new helios program vkey.
@@ -131,11 +129,13 @@ contract SP1Helios is AccessControlEnumerable {
     error PreviousHeaderNotSet(uint256 slot);
     error PreviousHeaderMismatch(bytes32 given, bytes32 expected);
     error PreviousHeadTooOld(uint256 slot);
-    error NoUpdatersProvided();
     error VkeyNotChanged(bytes32 vkey);
 
     /// @notice Initializes the SP1Helios contract with the provided parameters
-    /// @dev Sets up immutable contract state and grants the UPDATER_ROLE to the provided updaters
+    /// @dev Sets up immutable contract state and grants roles:
+    /// - `DEFAULT_ADMIN_ROLE` to `msg.sender`
+    /// - `VKEY_UPDATER_ROLE` to the configured vkey updater (if non-zero)
+    /// - `STATE_UPDATER_ROLE` to each configured state updater
     /// @param params The initialization parameters
     constructor(InitParams memory params) {
         GENESIS_TIME = params.genesisTime;
@@ -149,19 +149,18 @@ contract SP1Helios is AccessControlEnumerable {
         head = params.head;
         verifier = params.verifier;
 
-        // Set VKEY_UPDATER_ROLE as its own admin so it can grant/revoke itself
-        _setRoleAdmin(VKEY_UPDATER_ROLE, VKEY_UPDATER_ROLE);
-        _grantRole(VKEY_UPDATER_ROLE, params.vkeyUpdater);
+        // msg.sender is responsible for transferring `DEFAULT_ADMIN_ROLE` to the SpokePool after
+        // its creation
+        _grantRole(DEFAULT_ADMIN_ROLE, msg.sender);
 
-        // Make sure at least one updater is provided
-        require(params.updaters.length > 0, NoUpdatersProvided());
+        if (params.vkeyUpdater != address(0)) {
+            _grantRole(VKEY_UPDATER_ROLE, params.vkeyUpdater);
+        }
 
-        // Add all updaters
         for (uint256 i = 0; i < params.updaters.length; ++i) {
             address updater = params.updaters[i];
             if (updater != address(0)) {
-                _grantRole(UPDATER_ROLE, updater);
-                emit UpdaterAdded(updater);
+                _grantRole(STATE_UPDATER_ROLE, updater);
             }
         }
     }
@@ -172,7 +171,7 @@ contract SP1Helios is AccessControlEnumerable {
     /// @param publicValues The public commitments from the SP1 proof
     function update(bytes calldata proof, bytes calldata publicValues)
         external
-        onlyRole(UPDATER_ROLE)
+        onlyRole(STATE_UPDATER_ROLE)
     {
         // Parse the outputs from the committed public values associated with the proof.
         ProofOutputs memory po = abi.decode(publicValues, (ProofOutputs));
