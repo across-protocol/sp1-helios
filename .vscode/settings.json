@@ -3,6 +3,7 @@
   "[rust]": {
     "editor.defaultFormatter": "rust-lang.rust-analyzer"
   },
+  "solidity.formatter": "forge",
   "editor.rulers": [100],
   "rust-analyzer.check.overrideCommand": [
     "cargo",
