@@ -23,7 +23,7 @@ dotenv = "0.15.0"
 sp1-sdk = { version = "5.2.1", default-features = false, features = ["network"] }
 sp1-build = "5.2.1"
 
-tokio = "1.38.0"
+tokio = "1.44.2"
 serde = "1.0.203"
 thiserror = "1.0.61"
 serde_cbor = "0.11.2"
