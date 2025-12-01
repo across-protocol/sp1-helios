@@ -129,7 +129,7 @@ pub async fn main() -> Result<()> {
     genesis_config.helios_program_vkey = vk.bytes32();
     genesis_config.verifier = format!("0x{:x}", verifier);
     genesis_config.vkey_updater = format!("0x{:x}", vkey_updater);
-    
+
     // Get the account associated with the private key.
     let private_key = env::var("PRIVATE_KEY").unwrap();
     let signer: PrivateKeySigner = private_key.parse().expect("Failed to parse private key");

@@ -320,7 +320,7 @@ impl SP1HeliosOperator {
         info!("Starting SP1 Helios operator");
 
         loop {
-            let provider = ProviderBuilder::new().on_http(self.rpc_url.clone());
+            let provider = ProviderBuilder::new().connect_http(self.rpc_url.clone());
             let contract = SP1Helios::new(self.contract_address, provider);
 
             // Get the current slot from the contract
