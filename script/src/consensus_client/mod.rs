@@ -324,9 +324,8 @@ impl<S: ConsensusSpec, R: ConsensusRpc<S> + std::fmt::Debug> Client<S, R> {
         }
 
         // todo: log that we successfully advanced
-
-        if candidate.is_some() {
-            let (store, last_checkpoint) = candidate.unwrap();
+        if let Some(candidate) = candidate {
+            let (store, last_checkpoint) = candidate;
             self.apply_store_update(store, last_checkpoint);
 
             Ok(())

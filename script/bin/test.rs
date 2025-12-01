@@ -54,7 +54,7 @@ async fn main() -> Result<()> {
 
     // Setup execution RPC client
     let execution_rpc = std::env::var("SOURCE_EXECUTION_RPC_URL").unwrap();
-    let provider = ProviderBuilder::new().on_http(execution_rpc.parse()?);
+    let provider = ProviderBuilder::new().connect_http(execution_rpc.parse()?);
 
     // Get the proof using eth_getProof
     let proof = provider
