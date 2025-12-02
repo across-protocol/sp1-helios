@@ -58,9 +58,8 @@ pub struct ApiProofRequest {
     pub dst_chain_contract_from_head: u64,
     /// A corresponding stored header on destination chain Helios contract
     pub dst_chain_contract_from_header: String,
-    /// Optional vkey to use for the proof request. If not provided, the service's vkey is used automatically.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub vkey: Option<String>,
+    /// vkey to use for the proof request, must match the service's vkey
+    pub vkey: String,
 }
 
 // Internal represenation of `ApiProofRequest`
@@ -76,15 +75,12 @@ pub struct ProofRequest {
     pub dst_chain_contract_from_head: u64,
     /// A corresponding stored header on destination chain Helios contract
     pub dst_chain_contract_from_header: B256,
-    /// The verification key digest expected by the destination chain contract.
+    /// The vkey expected by the destination chain contract.
     pub vkey: B256,
 }
 
 impl ProofRequest {
-    /// Converts an API request to an internal ProofRequest, resolving the vkey.
-    ///
-    /// If the API request includes a vkey, it must match the service's vkey.
-    /// If no vkey is provided, the service's vkey is used automatically.
+    /// Converts an API request to an internal ProofRequest, validating the vkey.
     pub fn from_api_request(
         req: ApiProofRequest,
         service_vkey: B256,
@@ -112,24 +108,17 @@ impl ProofRequest {
                 ProofServiceError::Internal("Invalid header format".to_string())
             })?;
 
-        // Resolve vkey: if provided, validate it matches service vkey (error if mismatch).
-        // If not provided, default to service vkey.
-        let vkey = match req.vkey {
-            Some(vkey_str) => {
-                let requested_vkey = B256::from_str(&vkey_str)
-                    .map_err(|_| ProofServiceError::Internal("Invalid vkey format".to_string()))?;
+        // Parse and validate vkey matches service vkey
+        let vkey = B256::from_str(&req.vkey)
+            .map_err(|_| ProofServiceError::Internal("Invalid vkey format".to_string()))?;
 
-                if requested_vkey != service_vkey {
-                    return Err(ProofServiceError::Internal(format!(
-                        "Requested vkey {} does not match service vkey {}",
-                        vkey_str,
-                        format!("0x{}", hex::encode(service_vkey))
-                    )));
-                }
-                requested_vkey
-            }
-            None => service_vkey,
-        };
+        if vkey != service_vkey {
+            return Err(ProofServiceError::Internal(format!(
+                "Requested vkey {} does not match service vkey {}",
+                req.vkey,
+                format!("0x{}", hex::encode(service_vkey))
+            )));
+        }
 
         Ok(ProofRequest {
             src_chain_contract_address,
