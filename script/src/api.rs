@@ -58,6 +58,12 @@ pub struct ApiProofRequest {
     pub dst_chain_contract_from_head: u64,
     /// A corresponding stored header on destination chain Helios contract
     pub dst_chain_contract_from_header: String,
+    /// Optional verification key digest (hex string with 0x prefix).
+    /// If provided, the service validates it matches the current service vkey.
+    /// If omitted, the service's current vkey is used automatically.
+    /// Including vkey in the request ensures the ProofId is tied to a specific vkey version.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub vkey: Option<String>,
 }
 
 // Internal represenation of `ApiProofRequest`
@@ -73,12 +79,20 @@ pub struct ProofRequest {
     pub dst_chain_contract_from_head: u64,
     /// A corresponding stored header on destination chain Helios contract
     pub dst_chain_contract_from_header: B256,
+    /// The verification key digest expected by the destination chain contract.
+    /// Included in ProofId computation to ensure proofs are tied to a specific vkey.
+    pub vkey: B256,
 }
 
-impl TryFrom<ApiProofRequest> for ProofRequest {
-    type Error = ProofServiceError;
-
-    fn try_from(req: ApiProofRequest) -> Result<Self, Self::Error> {
+impl ProofRequest {
+    /// Converts an API request to an internal ProofRequest, resolving the vkey.
+    ///
+    /// If the API request includes a vkey, it must match the service's vkey.
+    /// If no vkey is provided, the service's vkey is used automatically.
+    pub fn from_api_request(
+        req: ApiProofRequest,
+        service_vkey: B256,
+    ) -> Result<Self, ProofServiceError> {
         let src_chain_contract_address = Address::from_str(&req.src_chain_contract_address)
             .map_err(|_| {
                 ProofServiceError::Internal("Invalid contract address format".to_string())
@@ -102,12 +116,32 @@ impl TryFrom<ApiProofRequest> for ProofRequest {
                 ProofServiceError::Internal("Invalid header format".to_string())
             })?;
 
+        // Resolve vkey: if provided, validate it matches service vkey (error if mismatch).
+        // If not provided, default to service vkey.
+        let vkey = match req.vkey {
+            Some(vkey_str) => {
+                let requested_vkey = B256::from_str(&vkey_str)
+                    .map_err(|_| ProofServiceError::Internal("Invalid vkey format".to_string()))?;
+
+                if requested_vkey != service_vkey {
+                    return Err(ProofServiceError::Internal(format!(
+                        "Requested vkey {} does not match service vkey {}",
+                        vkey_str,
+                        format!("0x{}", hex::encode(service_vkey))
+                    )));
+                }
+                requested_vkey
+            }
+            None => service_vkey,
+        };
+
         Ok(ProofRequest {
             src_chain_contract_address,
             src_chain_storage_slots,
             src_chain_block_number: req.src_chain_block_number,
             dst_chain_contract_from_head: req.dst_chain_contract_from_head,
             dst_chain_contract_from_header,
+            vkey,
         })
     }
 }
@@ -264,7 +298,12 @@ async fn request_proof_handler<B>(
 where
     B: ProofBackend + Clone + Send + Sync + 'static,
 {
-    let request = ProofRequest::try_from(api_request)?;
+    // Get the service's vkey as B256
+    let service_vkey_bytes = service.vkey_digest_bytes();
+    let service_vkey = B256::from_slice(&service_vkey_bytes);
+
+    // Convert API request to internal request, validating/resolving vkey
+    let request = ProofRequest::from_api_request(api_request, service_vkey)?;
 
     let (proof_id, status) = service.request_proof(request).await?;
 
