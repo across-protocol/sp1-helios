@@ -58,10 +58,7 @@ pub struct ApiProofRequest {
     pub dst_chain_contract_from_head: u64,
     /// A corresponding stored header on destination chain Helios contract
     pub dst_chain_contract_from_header: String,
-    /// Optional verification key digest (hex string with 0x prefix).
-    /// If provided, the service validates it matches the current service vkey.
-    /// If omitted, the service's current vkey is used automatically.
-    /// Including vkey in the request ensures the ProofId is tied to a specific vkey version.
+    /// Optional vkey to use for the proof request. If not provided, the service's vkey is used automatically.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub vkey: Option<String>,
 }
@@ -80,7 +77,6 @@ pub struct ProofRequest {
     /// A corresponding stored header on destination chain Helios contract
     pub dst_chain_contract_from_header: B256,
     /// The verification key digest expected by the destination chain contract.
-    /// Included in ProofId computation to ensure proofs are tied to a specific vkey.
     pub vkey: B256,
 }
 
