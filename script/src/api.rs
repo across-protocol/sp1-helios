@@ -79,12 +79,10 @@ pub struct ProofRequest {
     pub vkey: B256,
 }
 
-impl ProofRequest {
-    /// Converts an API request to an internal ProofRequest, validating the vkey.
-    pub fn from_api_request(
-        req: ApiProofRequest,
-        service_vkey: B256,
-    ) -> Result<Self, ProofServiceError> {
+impl TryFrom<ApiProofRequest> for ProofRequest {
+    type Error = ProofServiceError;
+
+    fn try_from(req: ApiProofRequest) -> Result<Self, Self::Error> {
         let src_chain_contract_address = Address::from_str(&req.src_chain_contract_address)
             .map_err(|_| {
                 ProofServiceError::Internal("Invalid contract address format".to_string())
@@ -108,17 +106,8 @@ impl ProofRequest {
                 ProofServiceError::Internal("Invalid header format".to_string())
             })?;
 
-        // Parse and validate vkey matches service vkey
         let vkey = B256::from_str(&req.vkey)
             .map_err(|_| ProofServiceError::Internal("Invalid vkey format".to_string()))?;
-
-        if vkey != service_vkey {
-            return Err(ProofServiceError::Internal(format!(
-                "Requested vkey {} does not match service vkey {}",
-                req.vkey,
-                format!("0x{}", hex::encode(service_vkey))
-            )));
-        }
 
         Ok(ProofRequest {
             src_chain_contract_address,
@@ -283,12 +272,19 @@ async fn request_proof_handler<B>(
 where
     B: ProofBackend + Clone + Send + Sync + 'static,
 {
-    // Get the service's vkey as B256
+    let request = ProofRequest::try_from(api_request)?;
+
     let service_vkey_bytes = service.vkey_digest_bytes();
     let service_vkey = B256::from_slice(&service_vkey_bytes);
 
-    // Convert API request to internal request, validating/resolving vkey
-    let request = ProofRequest::from_api_request(api_request, service_vkey)?;
+    // Validate that the requested vkey matches the service's vkey
+    if request.vkey != service_vkey {
+        return Err(ProofServiceError::Internal(format!(
+            "Requested vkey {} does not match service vkey {}",
+            request.vkey,
+            service_vkey
+        )));
+    }
 
     let (proof_id, status) = service.request_proof(request).await?;
 
