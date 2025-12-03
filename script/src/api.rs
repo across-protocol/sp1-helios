@@ -281,8 +281,7 @@ where
     if request.vkey != service_vkey {
         return Err(ProofServiceError::Internal(format!(
             "Requested vkey {} does not match service vkey {}",
-            request.vkey,
-            service_vkey
+            request.vkey, service_vkey
         )));
     }
 
