@@ -58,6 +58,8 @@ pub struct ApiProofRequest {
     pub dst_chain_contract_from_head: u64,
     /// A corresponding stored header on destination chain Helios contract
     pub dst_chain_contract_from_header: String,
+    /// vkey to use for the proof request, must match the service's vkey
+    pub vkey: String,
 }
 
 // Internal represenation of `ApiProofRequest`
@@ -73,6 +75,8 @@ pub struct ProofRequest {
     pub dst_chain_contract_from_head: u64,
     /// A corresponding stored header on destination chain Helios contract
     pub dst_chain_contract_from_header: B256,
+    /// The vkey expected by the destination chain contract.
+    pub vkey: B256,
 }
 
 impl TryFrom<ApiProofRequest> for ProofRequest {
@@ -102,12 +106,16 @@ impl TryFrom<ApiProofRequest> for ProofRequest {
                 ProofServiceError::Internal("Invalid header format".to_string())
             })?;
 
+        let vkey = B256::from_str(&req.vkey)
+            .map_err(|_| ProofServiceError::Internal("Invalid vkey format".to_string()))?;
+
         Ok(ProofRequest {
             src_chain_contract_address,
             src_chain_storage_slots,
             src_chain_block_number: req.src_chain_block_number,
             dst_chain_contract_from_head: req.dst_chain_contract_from_head,
             dst_chain_contract_from_header,
+            vkey,
         })
     }
 }
@@ -265,6 +273,17 @@ where
     B: ProofBackend + Clone + Send + Sync + 'static,
 {
     let request = ProofRequest::try_from(api_request)?;
+
+    let service_vkey_bytes = service.vkey_digest_bytes();
+    let service_vkey = B256::from_slice(&service_vkey_bytes);
+
+    // Validate that the requested vkey matches the service's vkey
+    if request.vkey != service_vkey {
+        return Err(ProofServiceError::Internal(format!(
+            "Requested vkey {} does not match service vkey {}",
+            request.vkey, service_vkey
+        )));
+    }
 
     let (proof_id, status) = service.request_proof(request).await?;
 
