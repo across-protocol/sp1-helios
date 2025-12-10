@@ -101,9 +101,7 @@ impl TryFrom<ApiProofRequest> for ProofRequest {
             .collect::<Result<Vec<_>, _>>()?;
 
         let dst_chain_contract_from_header = B256::from_str(&req.dst_chain_contract_from_header)
-            .map_err(|_| {
-                ProofServiceError::BadRequest("Invalid header format".to_string())
-            })?;
+            .map_err(|_| ProofServiceError::BadRequest("Invalid header format".to_string()))?;
 
         let vkey = B256::from_str(&req.vkey)
             .map_err(|_| ProofServiceError::BadRequest("Invalid vkey format".to_string()))?;
