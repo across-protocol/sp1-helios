@@ -18,10 +18,6 @@ name = "service"
 path = "./bin/service.rs"
 
 [[bin]]
-name = "test"
-path = "./bin/test.rs"
-
-[[bin]]
 name = "vkey"
 path = "./bin/vkey.rs"
 
