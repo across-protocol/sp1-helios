@@ -124,6 +124,12 @@ pub enum ProofServiceError {
     #[error("Proof generation failed for ID {0}: {1}")]
     ProofGenerationFailed(ProofId, String),
 
+    #[error("Bad request: {0}")]
+    BadRequest(String),
+
+    #[error("Vkey mismatch: {0}")]
+    VkeyMismatch(String),
+
     #[error("Internal service error: {0}")]
     Internal(String),
 }
