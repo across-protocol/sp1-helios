@@ -1,0 +1,46 @@
+[package]
+name = "sp1-helios-cli"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[[bin]]
+name = "operator"
+path = "bin/operator.rs"
+
+[[bin]]
+name = "genesis"
+path = "bin/genesis.rs"
+
+[[bin]]
+name = "vkey"
+path = "bin/vkey.rs"
+
+[[bin]]
+name = "play"
+path = "bin/play.rs"
+
+[dependencies]
+# Internal dependencies
+sp1_helios_api = { path = "../zk-api", package = "zk-api" }
+sp1-helios-primitives = { workspace = true }
+
+# Workspace dependencies
+dotenv = { workspace = true }
+sp1-sdk = { workspace = true }
+tokio = { workspace = true }
+helios-consensus-core = { workspace = true }
+helios-ethereum = { workspace = true }
+serde = { workspace = true }
+serde_cbor = { workspace = true }
+serde_json = { workspace = true }
+clap = { workspace = true }
+alloy-primitives = { workspace = true }
+alloy = { workspace = true }
+alloy-trie = { workspace = true }
+anyhow = { workspace = true }
+cargo_metadata = { workspace = true }
+reqwest = { workspace = true }
+tree_hash = { workspace = true }
+tracing = "0.1.41"
