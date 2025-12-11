@@ -5,7 +5,7 @@ use anyhow::Result;
 use clap::Parser;
 use helios_consensus_core::consensus_spec::MainnetConsensusSpec;
 use serde::{Deserialize, Serialize};
-use sp1_helios_script::{get_checkpoint, get_client, get_latest_checkpoint, rpc_proxies};
+use sp1_helios_api::{get_checkpoint, get_client, get_latest_checkpoint, rpc_proxies};
 use sp1_sdk::{utils, HashableKey, Prover, ProverClient};
 use std::{
     env, fs,
