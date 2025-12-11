@@ -1,25 +1,24 @@
-# IMPORTANT: This Dockerfile builds the 'service' binary from the 'script' package.
+# IMPORTANT: This Dockerfile builds the 'zk-api' binary from the 'zk-api' package.
 # It MUST be built from the WORKSPACE ROOT directory as the build context.
 #
 # --- Recommended Workflow ---
 #
 # 1. Build & Load for Local Testing (matches your current architecture, e.g., arm64 for M-series Macs):
-#    docker buildx build --platform linux/arm64 --load -f script/Dockerfile -t sp1-helios/service:local .
+#    docker buildx build --platform linux/arm64 --load -f zk-api/Dockerfile -t sp1-helios/zk-api:local .
 #
 # 2. Run Local Test:
-#    docker run --rm -it -p 8080:8080 --env-file .env sp1-helios/service:local
+#    docker run --rm -it -p 8080:8080 --env-file .env sp1-helios/zk-api:local
 #
 # 3. (If Tests Pass) Build & Push Multi-Arch for Deployment:
-#    docker buildx build --platform linux/amd64,linux/arm64 --push -f script/Dockerfile -t your-registry/sp1-helios/service:latest .
+#    docker buildx build --platform linux/amd64,linux/arm64 --push -f zk-api/Dockerfile -t your-registry/sp1-helios/zk-api:latest .
 
-# Use the Rust version specified in script/rust-toolchain
 # Stage 1: Builder
 FROM rust:1.89.0-bookworm AS builder
 
 # Make BuildKit's platform vars visible for cache scoping
 ARG TARGETPLATFORM
 
-# Install required toolchain components specified in script/rust-toolchain
+# Install required toolchain components
 # This is done early to leverage Docker layer caching
 RUN rustup component add llvm-tools rustc-dev
 
@@ -34,7 +33,8 @@ WORKDIR /app
 COPY Cargo.toml Cargo.lock ./
 # Copy required workspace members' source code
 COPY primitives ./primitives
-COPY script ./script
+COPY zk-api ./zk-api
+COPY cli ./cli
 # elf is required during build, as it's included by a build-time macro include_bytes! in proof_service.rs
 COPY elf ./elf
 
@@ -48,9 +48,9 @@ COPY test ./test
 RUN --mount=type=cache,id=cargo-target-${TARGETPLATFORM},target=/app/target \
     --mount=type=cache,id=cargo-git-${TARGETPLATFORM},target=/usr/local/cargo/git/db \
     --mount=type=cache,id=cargo-registry-${TARGETPLATFORM},target=/usr/local/cargo/registry \
-    cargo build --release --package sp1-helios-script --bin service && \
+    cargo build --release --package zk-api && \
     # Copy the built binary from the cached target dir to a regular path
-    cp /app/target/release/service /app/service-bin
+    cp /app/target/release/zk-api /app/zk-api-bin
 
 # Stage 2: Runner
 FROM debian:bookworm-slim
@@ -65,10 +65,10 @@ RUN useradd --create-home appuser
 USER appuser
 
 # Copy the compiled binary from the builder stage (from the path we copied it to)
-COPY --from=builder /app/service-bin /usr/local/bin/service
+COPY --from=builder /app/zk-api-bin /usr/local/bin/zk-api
 
 # Set the entrypoint for the container
-ENTRYPOINT ["/usr/local/bin/service"]
+ENTRYPOINT ["/usr/local/bin/zk-api"]
 
 # env vars will be passed either during running locally via --env-file .env or by cloud-run
 

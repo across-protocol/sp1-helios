@@ -2,7 +2,7 @@
 // Playground
 use alloy::hex;
 use anyhow::Context;
-use sp1_helios_script::{get_checkpoint, get_client, init_tracing, redis_store::RedisStore};
+use sp1_helios_api::{get_checkpoint, get_client, init_tracing, redis_store::RedisStore};
 use std::env;
 use tracing::info;
 use tree_hash::TreeHash;

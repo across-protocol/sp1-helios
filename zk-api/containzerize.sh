@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# Script to containerize the service application.
+# Script to containerize the zk-api application.
 # Supports two modes:
 # 1. local: Builds an image for the host architecture, loads it locally,
 #           and provides a sample 'docker run' command.
@@ -9,10 +9,10 @@
 # MUST be run from the workspace root directory.
 
 # --- Workspace Root Check ---
-if [[ ! -f "Cargo.toml" ]] || [[ ! -d "script" ]] || [[ ! -d "program" ]] || [[ ! -d "elf" ]]; then
+if [[ ! -f "Cargo.toml" ]] || [[ ! -d "zk-api" ]] || [[ ! -d "program" ]] || [[ ! -d "elf" ]]; then
   echo "ERROR: This script MUST be executed from the workspace root directory" >&2
-  echo "       (the directory containing Cargo.toml, script/, program/, elf/, etc.)." >&2
-  echo "       Example: cd /path/to/workspace && script/containerize.sh" >&2
+  echo "       (the directory containing Cargo.toml, zk-api/, program/, elf/, etc.)." >&2
+  echo "       Example: cd /path/to/workspace && zk-api/containerize.sh" >&2
   echo "Current directory: $(pwd)" >&2
   exit 1
 fi
@@ -24,7 +24,7 @@ set -e
 # Ensure pipelines return the status of the last command to exit non-zero.
 set -o pipefail
 
-echo "--- service Containerization Script ---"
+echo "--- zk-api Containerization Script ---"
 echo "INFO: Executing from workspace root: $(pwd)"
 echo
 
@@ -52,8 +52,8 @@ else
 fi
 
 # --- Shared Configuration ---
-IMAGE_NAME="service"
-DOCKERFILE_PATH="script/Dockerfile"
+IMAGE_NAME="zk-api"
+DOCKERFILE_PATH="zk-api/Dockerfile"
 
 # --- Mode-Specific Logic ---
 
@@ -98,8 +98,8 @@ if [[ "$MODE_LC" == "local" ]]; then
   echo "--- Local Build Successful! ---"
   echo "Image built and loaded locally: ${LOCAL_IMAGE_TAG}"
   echo
-  echo "To run the container locally (ensure script/.env exists):"
-  echo "docker run --rm -it -p 8080:8080 --env-file script/.env ${LOCAL_IMAGE_TAG}"
+  echo "To run the container locally:"
+  echo "docker run --rm -it -p 8080:8080 --env-file .env ${LOCAL_IMAGE_TAG}"
   echo
 
 # REMOTE MODE

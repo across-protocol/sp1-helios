@@ -7762,6 +7762,31 @@ dependencies = [
 ]
 
 [[package]]
+name = "sp1-helios-cli"
+version = "0.1.0"
+dependencies = [
+ "alloy",
+ "alloy-primitives",
+ "alloy-trie",
+ "anyhow",
+ "cargo_metadata",
+ "clap",
+ "dotenv",
+ "helios-consensus-core",
+ "helios-ethereum",
+ "reqwest",
+ "serde",
+ "serde_cbor",
+ "serde_json",
+ "sp1-helios-primitives",
+ "sp1-sdk",
+ "tokio",
+ "tracing",
+ "tree_hash",
+ "zk-api",
+]
+
+[[package]]
 name = "sp1-helios-primitives"
 version = "0.1.0"
 dependencies = [
@@ -7786,46 +7811,6 @@ dependencies = [
  "sp1-helios-primitives",
  "sp1-zkvm",
  "tree_hash",
-]
-
-[[package]]
-name = "sp1-helios-script"
-version = "0.1.0"
-dependencies = [
- "alloy",
- "alloy-primitives",
- "alloy-rlp",
- "alloy-trie",
- "anyhow",
- "async-trait",
- "axum 0.8.4",
- "cargo_metadata",
- "chrono",
- "clap",
- "dotenv",
- "eyre",
- "futures",
- "helios-consensus-core",
- "helios-ethereum",
- "once_cell",
- "redis",
- "reqwest",
- "serde",
- "serde_cbor",
- "serde_json",
- "sp1-build",
- "sp1-helios-primitives",
- "sp1-sdk",
- "thiserror 1.0.69",
- "tokio",
- "tokio-util",
- "tracing",
- "tracing-subscriber 0.3.20",
- "tree_hash",
- "utoipa",
- "utoipa-axum",
- "utoipa-swagger-ui",
- "uuid",
 ]
 
 [[package]]
@@ -9996,6 +9981,46 @@ dependencies = [
  "indexmap 2.9.0",
  "memchr",
  "zopfli",
+]
+
+[[package]]
+name = "zk-api"
+version = "0.1.0"
+dependencies = [
+ "alloy",
+ "alloy-primitives",
+ "alloy-rlp",
+ "alloy-trie",
+ "anyhow",
+ "async-trait",
+ "axum 0.8.4",
+ "cargo_metadata",
+ "chrono",
+ "clap",
+ "dotenv",
+ "eyre",
+ "futures",
+ "helios-consensus-core",
+ "helios-ethereum",
+ "once_cell",
+ "redis",
+ "reqwest",
+ "serde",
+ "serde_cbor",
+ "serde_json",
+ "sp1-build",
+ "sp1-helios-primitives",
+ "sp1-sdk",
+ "thiserror 1.0.69",
+ "tokio",
+ "tokio-util",
+ "tracing",
+ "tracing-subscriber 0.3.20",
+ "tree_hash",
+ "utoipa",
+ "utoipa-axum",
+ "utoipa-swagger-ui",
+ "uuid",
 ]
 
 [[package]]

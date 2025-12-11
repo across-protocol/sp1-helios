@@ -1,5 +1,5 @@
 [workspace]
-members = ["primitives", "script", "program", "test"]
+members = ["primitives", "zk-api", "cli", "program", "test"]
 resolver = "2"
 
 [workspace.package]
@@ -18,7 +18,7 @@ helios-ethereum = { git = "https://github.com/a16z/helios", tag = "0.9.4" }
 dotenv = "0.15.0"
 
 # sp1 dependencies. Keep the same version
-# ! When updating `sp1-build` version, update the `--tag` in both `script/build.rs` and `justfile`.
+# ! When updating `sp1-build` version, update the `--tag` in both `zk-api/build.rs` and `justfile`.
 # Also, in .gihub/workflows/elf.yml cargo prove command. Todo: consider adding a commit hook for this
 sp1-sdk = { version = "5.2.1", default-features = false, features = ["network"] }
 sp1-build = "5.2.1"

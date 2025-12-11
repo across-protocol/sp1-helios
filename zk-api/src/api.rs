@@ -85,7 +85,7 @@ impl TryFrom<ApiProofRequest> for ProofRequest {
     fn try_from(req: ApiProofRequest) -> Result<Self, Self::Error> {
         let src_chain_contract_address = Address::from_str(&req.src_chain_contract_address)
             .map_err(|_| {
-                ProofServiceError::Internal("Invalid contract address format".to_string())
+                ProofServiceError::BadRequest("Invalid contract address format".to_string())
             })?;
 
         // Iterate over the input vector of strings, parse each to B256.
@@ -95,19 +95,16 @@ impl TryFrom<ApiProofRequest> for ProofRequest {
             .iter()
             .map(|s| {
                 B256::from_str(s).map_err(|_| {
-                    ProofServiceError::Internal("Invalid storage slot format".to_string())
+                    ProofServiceError::BadRequest("Invalid storage slot format".to_string())
                 })
             })
             .collect::<Result<Vec<_>, _>>()?;
 
         let dst_chain_contract_from_header = B256::from_str(&req.dst_chain_contract_from_header)
-            .map_err(|_| {
-                // Use a more specific error message for the header
-                ProofServiceError::Internal("Invalid header format".to_string())
-            })?;
+            .map_err(|_| ProofServiceError::BadRequest("Invalid header format".to_string()))?;
 
         let vkey = B256::from_str(&req.vkey)
-            .map_err(|_| ProofServiceError::Internal("Invalid vkey format".to_string()))?;
+            .map_err(|_| ProofServiceError::BadRequest("Invalid vkey format".to_string()))?;
 
         Ok(ProofRequest {
             src_chain_contract_address,
@@ -204,7 +201,7 @@ impl IntoResponse for ProofServiceError {
                 ),
             ),
             ProofServiceError::NotFound(id) => (
-                StatusCode::NOT_FOUND,
+                StatusCode::NOT_FOUND, // 404
                 format!("Proof request {} not found", id.to_hex_string()),
             ),
             ProofServiceError::SerializationError(e) => {
@@ -227,6 +224,14 @@ impl IntoResponse for ProofServiceError {
                     format!("Proof generation failed: {}", msg),
                 )
             }
+            ProofServiceError::BadRequest(msg) => (
+                StatusCode::BAD_REQUEST, // 400 for malformed/invalid input
+                format!("Bad request: {}", msg),
+            ),
+            ProofServiceError::VkeyMismatch(msg) => (
+                StatusCode::UNPROCESSABLE_ENTITY, // 422 for semantic validation failure
+                format!("Vkey mismatch: {}", msg),
+            ),
             ProofServiceError::Internal(msg) => {
                 error!("Internal service error: {}", msg);
                 (
@@ -260,8 +265,9 @@ async fn health_handler() -> &'static str {
     request_body = ApiProofRequest,
     responses(
         (status = 202, description = "Proof request accepted", body = ProofRequestResponse),
-        (status = 400, description = "Invalid request data"),
+        (status = 400, description = "Invalid request data (malformed input)"),
         (status = 409, description = "Request already being processed"),
+        (status = 422, description = "Vkey does not match service vkey"),
         (status = 500, description = "Internal server error")
     )
 )]
@@ -279,7 +285,7 @@ where
 
     // Validate that the requested vkey matches the service's vkey
     if request.vkey != service_vkey {
-        return Err(ProofServiceError::Internal(format!(
+        return Err(ProofServiceError::VkeyMismatch(format!(
             "Requested vkey {} does not match service vkey {}",
             request.vkey, service_vkey
         )));
@@ -318,7 +324,7 @@ where
     B: ProofBackend + Clone + Send + Sync + 'static,
 {
     let proof_id_bytes = B256::from_str(&proof_id_hex).map_err(|_| {
-        ProofServiceError::Internal(format!("Invalid proof ID format: {}", proof_id_hex))
+        ProofServiceError::BadRequest(format!("Invalid proof ID format: {}", proof_id_hex))
     })?;
     let proof_id: ProofId = proof_id_bytes.into();
 
