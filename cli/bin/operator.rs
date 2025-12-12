@@ -6,10 +6,9 @@ use alloy::{
 use alloy_primitives::{address, b256, B256, U256};
 use anyhow::{Context, Result};
 use helios_consensus_core::consensus_spec::MainnetConsensusSpec;
-use helios_ethereum::consensus::Inner;
-use helios_ethereum::rpc::ConsensusRpc;
+use helios_ethereum::rpc::http_rpc::HttpRpc;
 use reqwest::Url;
-use sp1_helios_api::rpc_proxies::consensus::ConsensusRpcProxy;
+use sp1_helios_api::consensus_client::Client;
 use sp1_helios_api::*;
 use sp1_helios_primitives::types::{ContractStorage, ProofInputs, StorageSlot};
 use sp1_sdk::{EnvProver, ProverClient, SP1ProofWithPublicValues, SP1ProvingKey, SP1Stdin};
@@ -118,7 +117,7 @@ impl SP1HeliosOperator {
     /// Fetch values and generate an 'update' proof for the SP1 Helios contract.
     async fn request_update(
         &self,
-        mut client: Inner<MainnetConsensusSpec, ConsensusRpcProxy>,
+        mut client: Client<MainnetConsensusSpec, HttpRpc>,
     ) -> Result<Option<SP1ProofWithPublicValues>> {
         // Fetch required values.
         let provider = ProviderBuilder::new().connect_http(self.rpc_url.clone());
@@ -145,8 +144,8 @@ impl SP1HeliosOperator {
         let mut stdin = SP1Stdin::new();
 
         // Get sync committee updates + latest finality updates (signed by the latest sync committee)
-        let mut sync_committee_updates = get_updates(&client).await;
-        let finality_update = client.rpc.get_finality_update().await.unwrap();
+        let mut sync_committee_updates = client.get_updates_for_current_period().await?;
+        let finality_update = client.get_finality_update().await?;
 
         // Check if contract is up to date
         let latest_finalized_header = finality_update.finalized_header();
@@ -176,8 +175,8 @@ impl SP1HeliosOperator {
                 println!("Applying optimization, skipping update");
                 let temp_update = sync_committee_updates.remove(0);
 
-                client.verify_update(&temp_update).unwrap(); // Panics if not valid
-                client.apply_update(&temp_update);
+                client.verify_sync_update(&temp_update)?; // Returns error if not valid
+                client.apply_sync_update(&temp_update);
             }
         }
 
@@ -337,8 +336,9 @@ impl SP1HeliosOperator {
             // Fetch the checkpoint at that slot
             let checkpoint = get_checkpoint(slot).await;
 
-            // Get the client from the checkpoint
-            let client = get_client(checkpoint).await;
+            // Create a Client and sync to the checkpoint
+            let mut client = Client::<MainnetConsensusSpec, HttpRpc>::from_env()?;
+            client.sync(checkpoint).await?;
 
             // Request an update
             match self.request_update(client).await {

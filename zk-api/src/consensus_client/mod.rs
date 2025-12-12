@@ -167,7 +167,7 @@ impl<S: ConsensusSpec, R: ConsensusRpc<S> + std::fmt::Debug> Client<S, R> {
         // R we're using. Some R's expect these "urls" to have different meaning, e.g. it can be
         // a name of another env variable with some init params for that R in R::new
         let paths_str = env::var(CONENSUS_RPCS_ENV_VAR)
-            .expect("ConsensusRpcProxy: No RPC URLs found in environment variable");
+            .expect("Client: No RPC URLs found in environment variable");
 
         let paths: Vec<&str> = paths_str
             .split(',')
@@ -181,7 +181,7 @@ impl<S: ConsensusSpec, R: ConsensusRpc<S> + std::fmt::Debug> Client<S, R> {
     pub fn new(config: Arc<Config>, paths: &[&str]) -> Result<Self> {
         assert!(
             !paths.is_empty(),
-            "ConsensusRpcProxy: No RPC URLs found in environment variable"
+            "Client: No RPC URLs found in environment variable"
         );
 
         let rpcs: Vec<R> = paths.iter().map(|path| R::new(path)).collect();
@@ -215,6 +215,106 @@ impl<S: ConsensusSpec, R: ConsensusRpc<S> + std::fmt::Debug> Client<S, R> {
         );
 
         Ok(())
+    }
+
+    // ========================================================================
+    // RPC ACCESS METHODS (for CLI tools that need direct RPC access)
+    // ========================================================================
+
+    /// Fetch the latest finality update from RPCs.
+    /// Uses multiplexing: queries all RPCs, returns first successful result.
+    pub async fn get_finality_update(&self) -> Result<FinalityUpdate<S>> {
+        for rpc in &self.rpcs {
+            match timeout(
+                std::time::Duration::from_secs(5),
+                rpc.get_finality_update(),
+            )
+            .await
+            {
+                Ok(Ok(update)) => return Ok(update),
+                Ok(Err(e)) => {
+                    warn!(target: "consensus_client::get_finality_update", "RPC failed: {}", e);
+                }
+                Err(_) => {
+                    warn!(target: "consensus_client::get_finality_update", "RPC timed out");
+                }
+            }
+        }
+        Err(anyhow!("All RPCs failed to fetch finality update"))
+    }
+
+    /// Fetch sync committee updates for a given period.
+    /// Uses multiplexing: queries all RPCs, returns first successful result.
+    pub async fn get_updates(&self, period: u64, count: u8) -> Result<Vec<Update<S>>> {
+        for rpc in &self.rpcs {
+            match timeout(
+                std::time::Duration::from_secs(5),
+                rpc.get_updates(period, count),
+            )
+            .await
+            {
+                Ok(Ok(updates)) => return Ok(updates),
+                Ok(Err(e)) => {
+                    warn!(target: "consensus_client::get_updates", "RPC failed: {}", e);
+                }
+                Err(_) => {
+                    warn!(target: "consensus_client::get_updates", "RPC timed out");
+                }
+            }
+        }
+        Err(anyhow!("All RPCs failed to fetch updates"))
+    }
+
+    /// Fetch sync committee updates for the current period based on client state.
+    /// Convenience wrapper around get_updates().
+    pub async fn get_updates_for_current_period(&self) -> Result<Vec<Update<S>>> {
+        let period = calc_sync_period::<S>(self.store.finalized_header.beacon().slot);
+        self.get_updates(period, MAX_REQUEST_LIGHT_CLIENT_UPDATES).await
+    }
+
+    /// Verify a sync committee update against current store state.
+    /// Returns Ok(()) if valid, Err if invalid.
+    pub fn verify_sync_update(&self, update: &Update<S>) -> Result<()> {
+        helios_consensus_core::verify_update::<S>(
+            update,
+            self.config.expected_current_slot(),
+            &self.store,
+            self.config.chain.genesis_root,
+            &self.config.forks,
+        )
+        .map_err(|e| anyhow!("{e}"))
+    }
+
+    /// Apply a sync committee update to the store.
+    /// Call verify_sync_update() first to ensure validity.
+    pub fn apply_sync_update(&mut self, update: &Update<S>) {
+        let new_checkpoint = helios_consensus_core::apply_update::<S>(&mut self.store, update);
+        if new_checkpoint.is_some() {
+            self.last_checkpoint = new_checkpoint;
+        }
+    }
+
+    /// Get expected current slot based on current time.
+    /// Convenience method that delegates to ConfigExt.
+    pub fn expected_current_slot(&self) -> u64 {
+        self.config.expected_current_slot()
+    }
+
+    /// Fetch a beacon block by slot.
+    /// Uses multiplexing: queries all RPCs, returns first successful result.
+    pub async fn get_block(&self, slot: u64) -> Result<helios_consensus_core::types::BeaconBlock<S>> {
+        for rpc in &self.rpcs {
+            match timeout(std::time::Duration::from_secs(5), rpc.get_block(slot)).await {
+                Ok(Ok(block)) => return Ok(block),
+                Ok(Err(e)) => {
+                    warn!(target: "consensus_client::get_block", "RPC failed for slot {}: {}", slot, e);
+                }
+                Err(_) => {
+                    warn!(target: "consensus_client::get_block", "RPC timed out for slot {}", slot);
+                }
+            }
+        }
+        Err(anyhow!("All RPCs failed to fetch block for slot {}", slot))
     }
 
     // bootstrap is a heavy call, use a 12-sec timeout for it
