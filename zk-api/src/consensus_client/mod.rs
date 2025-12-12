@@ -252,6 +252,22 @@ impl<S: ConsensusSpec, R: ConsensusRpc<S> + std::fmt::Debug> Client<S, R> {
         Err(anyhow!("All RPCs failed for {}", op_name))
     }
 
+    /// Multiplexing Strategy 2: Race All, First Wins
+    /// Starts all futures concurrently, returns the first successful result.
+    /// Remaining futures are cancelled once one succeeds.
+    async fn multiplex_race<T: 'static>(
+        futs: Vec<std::pin::Pin<Box<dyn Future<Output = Result<T>> + Send>>>,
+        op_name: &'static str,
+    ) -> Result<T> {
+        if futs.is_empty() {
+            return Err(anyhow!("No RPCs available for {}", op_name));
+        }
+        match select_ok(futs).await {
+            Ok((result, _remaining)) => Ok(result),
+            Err(e) => Err(anyhow!("All RPCs failed for {}: {}", op_name, e)),
+        }
+    }
+
     // =========================================================================
     // RPC Methods (using multiplexing helpers)
     // =========================================================================
@@ -359,19 +375,11 @@ impl<S: ConsensusSpec, R: ConsensusRpc<S> + std::fmt::Debug> Client<S, R> {
             futs.push(fut);
         }
 
-        // Take first non-erroring result. Each fut checks the integrity of bootstrap and therefore
-        // resulting `LightClientStore`. So take the fastest completing one here
-        let validated_store = select_ok(futs).await;
-        match validated_store {
-            Ok((store, futs)) => {
-                drop(futs);
-                self.store = store;
-                // todo: this is a deviation from helios logic, but I'm 99% it's warranted
-                self.last_checkpoint = Some(checkpoint);
-                Ok(())
-            }
-            Err(e) => Err(e),
-        }
+        // Race all futures, take the first successful result
+        let store = Self::multiplex_race(futs, "bootstrap").await?;
+        self.store = store;
+        self.last_checkpoint = Some(checkpoint);
+        Ok(())
     }
 
     const ADVANCE_TIMEOUT_SECS: u64 = 4;
