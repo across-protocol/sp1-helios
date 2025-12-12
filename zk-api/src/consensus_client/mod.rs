@@ -221,12 +221,7 @@ impl<S: ConsensusSpec, R: ConsensusRpc<S> + std::fmt::Debug> Client<S, R> {
     /// Uses multiplexing: queries all RPCs, returns first successful result.
     pub async fn get_finality_update(&self) -> Result<FinalityUpdate<S>> {
         for rpc in &self.rpcs {
-            match timeout(
-                std::time::Duration::from_secs(5),
-                rpc.get_finality_update(),
-            )
-            .await
-            {
+            match timeout(std::time::Duration::from_secs(5), rpc.get_finality_update()).await {
                 Ok(Ok(update)) => return Ok(update),
                 Ok(Err(e)) => {
                     warn!(target: "consensus_client::get_finality_update", "RPC failed: {}", e);
@@ -265,7 +260,8 @@ impl<S: ConsensusSpec, R: ConsensusRpc<S> + std::fmt::Debug> Client<S, R> {
     /// Convenience wrapper around get_updates().
     pub async fn get_updates_for_current_period(&self) -> Result<Vec<Update<S>>> {
         let period = calc_sync_period::<S>(self.store.finalized_header.beacon().slot);
-        self.get_updates(period, MAX_REQUEST_LIGHT_CLIENT_UPDATES).await
+        self.get_updates(period, MAX_REQUEST_LIGHT_CLIENT_UPDATES)
+            .await
     }
 
     /// Verify a sync committee update against current store state.
@@ -298,7 +294,10 @@ impl<S: ConsensusSpec, R: ConsensusRpc<S> + std::fmt::Debug> Client<S, R> {
 
     /// Fetch a beacon block by slot.
     /// Uses multiplexing: queries all RPCs, returns first successful result.
-    pub async fn get_block(&self, slot: u64) -> Result<helios_consensus_core::types::BeaconBlock<S>> {
+    pub async fn get_block(
+        &self,
+        slot: u64,
+    ) -> Result<helios_consensus_core::types::BeaconBlock<S>> {
         for rpc in &self.rpcs {
             match timeout(std::time::Duration::from_secs(5), rpc.get_block(slot)).await {
                 Ok(Ok(block)) => return Ok(block),

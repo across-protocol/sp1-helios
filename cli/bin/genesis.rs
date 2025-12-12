@@ -92,11 +92,7 @@ pub async fn main() -> Result<()> {
         .beacon()
         .tree_hash_root();
     let head = client.store.finalized_header.clone().beacon().slot;
-    let sync_committee_hash = client
-        .store
-        .current_sync_committee
-        .clone()
-        .tree_hash_root();
+    let sync_committee_hash = client.store.current_sync_committee.clone().tree_hash_root();
     let genesis_time = client.config.chain.genesis_time;
     const SECONDS_PER_SLOT: u64 = 12;
     const SLOTS_PER_EPOCH: u64 = 32;
