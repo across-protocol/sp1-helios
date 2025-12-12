@@ -6,7 +6,6 @@ use anyhow::anyhow;
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use sp1_helios_primitives::types::{ContractStorage, StorageSlot};
 use thiserror::Error;
-use tracing::error;
 use utoipa::ToSchema;
 
 /// Unique identifier for a proof request, derived from the Keccak256 hash of its RLP-encoded content.

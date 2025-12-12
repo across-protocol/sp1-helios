@@ -1,7 +1,6 @@
 use anyhow::Result;
 use futures::future::{select_ok, BoxFuture};
 
-pub mod consensus;
 pub mod execution;
 
 /// Takes a closure that produces a future for each provided client, waits for the first succeeding

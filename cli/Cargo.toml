@@ -6,10 +6,6 @@ license.workspace = true
 authors.workspace = true
 
 [[bin]]
-name = "operator"
-path = "bin/operator.rs"
-
-[[bin]]
 name = "genesis"
 path = "bin/genesis.rs"
 
