@@ -255,8 +255,8 @@ impl<S: ConsensusSpec, R: ConsensusRpc<S> + std::fmt::Debug> Client<S, R> {
     /// Multiplexing Strategy 2: Race All, First Wins
     /// Starts all futures concurrently, returns the first successful result.
     /// Remaining futures are cancelled once one succeeds.
-    async fn multiplex_race<T: 'static>(
-        futs: Vec<std::pin::Pin<Box<dyn Future<Output = Result<T>> + Send>>>,
+    async fn multiplex_race<T>(
+        futs: Vec<std::pin::Pin<Box<dyn Future<Output = Result<T>> + Send + '_>>>,
         op_name: &'static str,
     ) -> Result<T> {
         if futs.is_empty() {
@@ -266,6 +266,41 @@ impl<S: ConsensusSpec, R: ConsensusRpc<S> + std::fmt::Debug> Client<S, R> {
             Ok((result, _remaining)) => Ok(result),
             Err(e) => Err(anyhow!("All RPCs failed for {}: {}", op_name, e)),
         }
+    }
+
+    /// Multiplexing Strategy 3: Wait All, Pick Best
+    /// Waits for all futures to complete, then picks the result with the most advanced store.
+    async fn multiplex_best<T, Fut>(
+        futs: impl Iterator<Item = Fut>,
+        get_store: impl Fn(&T) -> &LightClientStore<S>,
+        op_name: &'static str,
+    ) -> Result<T>
+    where
+        Fut: Future<Output = Result<T>>,
+    {
+        let results = join_all(futs).await;
+        let mut candidate: Option<T> = None;
+
+        for result in results {
+            match result {
+                Ok(value) => {
+                    if let Some(ref current_best) = candidate {
+                        if compare_store_advancement(get_store(&value), get_store(current_best))
+                            == Ordering::Greater
+                        {
+                            candidate = Some(value);
+                        }
+                    } else {
+                        candidate = Some(value);
+                    }
+                }
+                Err(e) => {
+                    debug!(target: "consensus_client", "{}: RPC failed: {}", op_name, e);
+                }
+            }
+        }
+
+        candidate.ok_or_else(|| anyhow!("All RPCs failed for {}", op_name))
     }
 
     // =========================================================================
@@ -384,10 +419,7 @@ impl<S: ConsensusSpec, R: ConsensusRpc<S> + std::fmt::Debug> Client<S, R> {
 
     const ADVANCE_TIMEOUT_SECS: u64 = 4;
     pub async fn advance(&mut self) -> Result<()> {
-        debug!(
-            target: "consensus_client::advance",
-            "start"
-        );
+        debug!(target: "consensus_client::advance", "start");
 
         let futs = self.rpcs.iter().map(|rpc| {
             let store = self.store.clone();
@@ -406,42 +438,10 @@ impl<S: ConsensusSpec, R: ConsensusRpc<S> + std::fmt::Debug> Client<S, R> {
             }
         });
 
-        debug!(target: "consensus_client::advance", "waiting for response from {} rpcs", futs.len());
-
         // Wait for all futures and pick the most advanced store
-        let results = join_all(futs).await;
-        let mut candidate: Option<(LightClientStore<S>, Option<B256>)> = None;
-        for result in results {
-            match result {
-                Ok((result_store, result_checkpoint)) => {
-                    if let Some((ref candidate_store, _)) = candidate {
-                        if compare_store_advancement(&result_store, candidate_store)
-                            == Ordering::Greater
-                        {
-                            candidate = Some((result_store, result_checkpoint));
-                        }
-                    } else {
-                        candidate = Some((result_store, result_checkpoint));
-                    }
-                }
-                Err(e) => {
-                    debug!(
-                        target: "consensus_client::advance",
-                        "advance errored for rpc {}", e
-                    );
-                }
-            }
-        }
-
-        // todo: log that we successfully advanced
-        if let Some(candidate) = candidate {
-            let (store, last_checkpoint) = candidate;
-            self.apply_store_update(store, last_checkpoint);
-
-            Ok(())
-        } else {
-            Err(anyhow!("all rpcs failed"))
-        }
+        let (store, last_checkpoint) = Self::multiplex_best(futs, |(s, _)| s, "advance").await?;
+        self.apply_store_update(store, last_checkpoint);
+        Ok(())
     }
 
     async fn advance_single_rpc(
@@ -513,40 +513,10 @@ impl<S: ConsensusSpec, R: ConsensusRpc<S> + std::fmt::Debug> Client<S, R> {
             }
         });
 
-        // Wait for all RPCs to finish in order to pick the result that advances our chain view the most
-        let results = join_all(futs).await;
-        let mut candidate: Option<SyncToChainTrace<S>> = None;
-        for result in results {
-            match result {
-                Ok(result_trace) => {
-                    if let Some(ref candidate_trace) = candidate {
-                        if compare_store_advancement(
-                            &result_trace.final_store,
-                            &candidate_trace.final_store,
-                        ) == Ordering::Greater
-                        {
-                            candidate = Some(result_trace);
-                        }
-                    } else {
-                        candidate = Some(result_trace);
-                    }
-                }
-                Err(e) => {
-                    warn!(
-                        target: "consensus_client::sync_to_chain",
-                        "sync errored for RPC {:#?}", e
-                    );
-                }
-            }
-        }
-
-        if let Some(trace) = candidate {
-            self.apply_store_update(trace.final_store.clone(), trace.last_checkpoint);
-
-            Ok(trace)
-        } else {
-            Err(anyhow!("all rpcs failed"))
-        }
+        // Wait for all RPCs and pick the result that advances our chain view the most
+        let trace = Self::multiplex_best(futs, |t| &t.final_store, "sync_to_chain").await?;
+        self.apply_store_update(trace.final_store.clone(), trace.last_checkpoint);
+        Ok(trace)
     }
 
     async fn sync_to_chain_single_rpc(
@@ -790,4 +760,104 @@ impl<T: std::ops::Deref<Target = Config>> ConfigExt for T {
 
         Duration::try_seconds(next_update as i64).unwrap()
     }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tokio::time::sleep;
+
+    // Type alias to reduce verbosity
+    type TestClient = Client<
+        helios_consensus_core::consensus_spec::MainnetConsensusSpec,
+        helios_ethereum::rpc::http_rpc::HttpRpc,
+    >;
+
+    // ============================================================
+    // Tests for multiplex_race (Race All, First Wins)
+    // ============================================================
+
+    #[tokio::test]
+    async fn test_multiplex_race_fastest_wins() {
+        let futs: Vec<std::pin::Pin<Box<dyn Future<Output = Result<String>> + Send>>> = vec![
+            Box::pin(async {
+                sleep(std::time::Duration::from_millis(100)).await;
+                Ok("slow".to_string())
+            }),
+            Box::pin(async {
+                sleep(std::time::Duration::from_millis(10)).await;
+                Ok("fast".to_string())
+            }),
+            Box::pin(async {
+                sleep(std::time::Duration::from_millis(50)).await;
+                Ok("medium".to_string())
+            }),
+        ];
+
+        let result = TestClient::multiplex_race(futs, "test_race").await;
+
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), "fast");
+    }
+
+    #[tokio::test]
+    async fn test_multiplex_race_first_fails_second_wins() {
+        let futs: Vec<std::pin::Pin<Box<dyn Future<Output = Result<String>> + Send>>> = vec![
+            Box::pin(async {
+                sleep(std::time::Duration::from_millis(10)).await;
+                Err(anyhow::anyhow!("first failed"))
+            }),
+            Box::pin(async {
+                sleep(std::time::Duration::from_millis(50)).await;
+                Ok("second".to_string())
+            }),
+        ];
+
+        let result = TestClient::multiplex_race(futs, "test_race").await;
+
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), "second");
+    }
+
+    #[tokio::test]
+    async fn test_multiplex_race_all_fail() {
+        let futs: Vec<std::pin::Pin<Box<dyn Future<Output = Result<String>> + Send>>> = vec![
+            Box::pin(async { Err(anyhow::anyhow!("first failed")) }),
+            Box::pin(async { Err(anyhow::anyhow!("second failed")) }),
+        ];
+
+        let result = TestClient::multiplex_race(futs, "test_race").await;
+
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("All RPCs failed"));
+    }
+
+    #[tokio::test]
+    async fn test_multiplex_race_empty() {
+        let futs: Vec<std::pin::Pin<Box<dyn Future<Output = Result<String>> + Send>>> = vec![];
+
+        let result = TestClient::multiplex_race(futs, "test_race").await;
+
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("No RPCs available"));
+    }
+
+    // ============================================================
+    // Tests for multiplex_best (Wait All, Pick Best)
+    // Note: Full testing of store comparison requires constructing
+    // LightClientStore which has complex external dependencies.
+    // These tests verify the basic flow (success/failure handling).
+    // ============================================================
+
+    // Note: multiplex_best tests are omitted because LightClientStore
+    // construction requires complex types from helios_consensus_core
+    // that don't expose simple constructors. The logic is tested
+    // indirectly through integration tests of advance/sync_to_chain.
+
+    // ============================================================
+    // Tests for multiplex_first_rpc (Sequential First Success)
+    // Note: Testing this helper directly requires a mock RPC type
+    // that implements ConsensusRpc. The logic is tested indirectly
+    // through the public API methods that use it.
+    // ============================================================
 }
