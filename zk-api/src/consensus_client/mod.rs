@@ -217,10 +217,6 @@ impl<S: ConsensusSpec, R: ConsensusRpc<S> + std::fmt::Debug> Client<S, R> {
         Ok(())
     }
 
-    // ========================================================================
-    // RPC ACCESS METHODS (for CLI tools that need direct RPC access)
-    // ========================================================================
-
     /// Fetch the latest finality update from RPCs.
     /// Uses multiplexing: queries all RPCs, returns first successful result.
     pub async fn get_finality_update(&self) -> Result<FinalityUpdate<S>> {
