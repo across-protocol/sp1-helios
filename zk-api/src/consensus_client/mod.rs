@@ -217,43 +217,61 @@ impl<S: ConsensusSpec, R: ConsensusRpc<S> + std::fmt::Debug> Client<S, R> {
         Ok(())
     }
 
-    /// Fetch the latest finality update from RPCs.
-    /// Uses multiplexing: queries all RPCs, returns first successful result.
-    pub async fn get_finality_update(&self) -> Result<FinalityUpdate<S>> {
-        for rpc in &self.rpcs {
-            match timeout(std::time::Duration::from_secs(5), rpc.get_finality_update()).await {
-                Ok(Ok(update)) => return Ok(update),
+    // =========================================================================
+    // Multiplexing Helpers
+    // =========================================================================
+
+    /// Multiplexing Strategy 1: Sequential First Success
+    /// Tries each RPC one at a time, returns the first successful result.
+    ///
+    /// This is implemented as a macro-like pattern because async closures
+    /// have lifetime issues with borrowed RPC references.
+    async fn multiplex_first_rpc<T, E>(
+        rpcs: &[R],
+        timeout_secs: u64,
+        op_name: &'static str,
+        mut call_rpc: impl FnMut(
+            &R,
+        )
+            -> std::pin::Pin<Box<dyn Future<Output = Result<T, E>> + Send + '_>>,
+    ) -> Result<T>
+    where
+        E: std::fmt::Display,
+    {
+        for rpc in rpcs {
+            match timeout(std::time::Duration::from_secs(timeout_secs), call_rpc(rpc)).await {
+                Ok(Ok(result)) => return Ok(result),
                 Ok(Err(e)) => {
-                    warn!(target: "consensus_client::get_finality_update", "RPC failed: {}", e);
+                    warn!(target: "consensus_client", "{}: RPC failed: {}", op_name, e);
                 }
                 Err(_) => {
-                    warn!(target: "consensus_client::get_finality_update", "RPC timed out");
+                    warn!(target: "consensus_client", "{}: RPC timed out", op_name);
                 }
             }
         }
-        Err(anyhow!("All RPCs failed to fetch finality update"))
+        Err(anyhow!("All RPCs failed for {}", op_name))
+    }
+
+    // =========================================================================
+    // RPC Methods (using multiplexing helpers)
+    // =========================================================================
+
+    /// Fetch the latest finality update from RPCs.
+    /// Uses multiplexing: queries all RPCs sequentially, returns first successful result.
+    pub async fn get_finality_update(&self) -> Result<FinalityUpdate<S>> {
+        Self::multiplex_first_rpc(&self.rpcs, 5, "get_finality_update", |rpc| {
+            rpc.get_finality_update()
+        })
+        .await
     }
 
     /// Fetch sync committee updates for a given period.
-    /// Uses multiplexing: queries all RPCs, returns first successful result.
+    /// Uses multiplexing: queries all RPCs sequentially, returns first successful result.
     pub async fn get_updates(&self, period: u64, count: u8) -> Result<Vec<Update<S>>> {
-        for rpc in &self.rpcs {
-            match timeout(
-                std::time::Duration::from_secs(5),
-                rpc.get_updates(period, count),
-            )
-            .await
-            {
-                Ok(Ok(updates)) => return Ok(updates),
-                Ok(Err(e)) => {
-                    warn!(target: "consensus_client::get_updates", "RPC failed: {}", e);
-                }
-                Err(_) => {
-                    warn!(target: "consensus_client::get_updates", "RPC timed out");
-                }
-            }
-        }
-        Err(anyhow!("All RPCs failed to fetch updates"))
+        Self::multiplex_first_rpc(&self.rpcs, 5, "get_updates", |rpc| {
+            rpc.get_updates(period, count)
+        })
+        .await
     }
 
     /// Fetch sync committee updates for the current period based on client state.
@@ -293,23 +311,12 @@ impl<S: ConsensusSpec, R: ConsensusRpc<S> + std::fmt::Debug> Client<S, R> {
     }
 
     /// Fetch a beacon block by slot.
-    /// Uses multiplexing: queries all RPCs, returns first successful result.
+    /// Uses multiplexing: queries all RPCs sequentially, returns first successful result.
     pub async fn get_block(
         &self,
         slot: u64,
     ) -> Result<helios_consensus_core::types::BeaconBlock<S>> {
-        for rpc in &self.rpcs {
-            match timeout(std::time::Duration::from_secs(5), rpc.get_block(slot)).await {
-                Ok(Ok(block)) => return Ok(block),
-                Ok(Err(e)) => {
-                    warn!(target: "consensus_client::get_block", "RPC failed for slot {}: {}", slot, e);
-                }
-                Err(_) => {
-                    warn!(target: "consensus_client::get_block", "RPC timed out for slot {}", slot);
-                }
-            }
-        }
-        Err(anyhow!("All RPCs failed to fetch block for slot {}", slot))
+        Self::multiplex_first_rpc(&self.rpcs, 5, "get_block", |rpc| rpc.get_block(slot)).await
     }
 
     // bootstrap is a heavy call, use a 12-sec timeout for it
