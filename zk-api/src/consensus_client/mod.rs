@@ -224,40 +224,37 @@ impl<S: ConsensusSpec, R: ConsensusRpc<S> + std::fmt::Debug> Client<S, R> {
     }
 
     /// Fetch a beacon block by slot.
-    /// Races all RPCs in parallel, returns the first successful result.
+    /// Tries primary RPC first, then falls back to backups in parallel.
     pub async fn get_block(
         &self,
         slot: u64,
     ) -> Result<helios_consensus_core::types::BeaconBlock<S>> {
-        let futs: Vec<_> = self
+        // 1) Try the primary RPC first
+        match self.rpcs.first().unwrap().get_block(slot).await {
+            Ok(block) => return Ok(block),
+            Err(e) => {
+                warn!(
+                    target: "consensus_client::get_block",
+                    "Primary RPC failed; falling back to backups for slot {}: {}", slot, e
+                );
+            }
+        }
+
+        // 2) Build timeout-wrapped futures for all the backups
+        let tasks: Vec<_> = self
             .rpcs
             .iter()
-            .map(|rpc| {
-                async move {
-                    timeout(std::time::Duration::from_secs(5), rpc.get_block(slot))
-                        .await
-                        .map_err(|_| anyhow!("RPC timed out"))?
-                        .map_err(|e| anyhow!("RPC failed: {}", e))
-                }
-                .boxed()
-            })
+            .skip(1)
+            .map(|rpc| timeout(std::time::Duration::from_secs(5), rpc.get_block(slot)))
             .collect();
 
-        if futs.is_empty() {
-            return Err(anyhow!(
-                "No RPCs available to fetch block for slot {}",
-                slot
-            ));
-        }
-
-        match select_ok(futs).await {
-            Ok((block, _remaining)) => Ok(block),
-            Err(e) => Err(anyhow!(
-                "All RPCs failed to fetch block for slot {}: {}",
-                slot,
-                e
-            )),
-        }
+        // 3) Run them all, drop any that timed out or errored, take the first valid one
+        join_all(tasks)
+            .await
+            .into_iter()
+            .filter_map(|res| res.ok().and_then(Result::ok))
+            .next()
+            .ok_or_else(|| anyhow!("All RPCs failed to fetch block for slot {}", slot))
     }
 
     // bootstrap is a heavy call, use a 12-sec timeout for it
