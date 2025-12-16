@@ -224,23 +224,33 @@ impl<S: ConsensusSpec, R: ConsensusRpc<S> + std::fmt::Debug> Client<S, R> {
     }
 
     /// Fetch a beacon block by slot.
-    /// Uses multiplexing: queries all RPCs, returns first successful result.
+    /// Races all RPCs in parallel, returns the first successful result.
     pub async fn get_block(
         &self,
         slot: u64,
     ) -> Result<helios_consensus_core::types::BeaconBlock<S>> {
-        for rpc in &self.rpcs {
-            match timeout(std::time::Duration::from_secs(5), rpc.get_block(slot)).await {
-                Ok(Ok(block)) => return Ok(block),
-                Ok(Err(e)) => {
-                    warn!(target: "consensus_client::get_block", "RPC failed for slot {}: {}", slot, e);
+        let futs: Vec<_> = self
+            .rpcs
+            .iter()
+            .map(|rpc| {
+                async move {
+                    timeout(std::time::Duration::from_secs(5), rpc.get_block(slot))
+                        .await
+                        .map_err(|_| anyhow!("RPC timed out"))?
+                        .map_err(|e| anyhow!("RPC failed: {}", e))
                 }
-                Err(_) => {
-                    warn!(target: "consensus_client::get_block", "RPC timed out for slot {}", slot);
-                }
-            }
+                .boxed()
+            })
+            .collect();
+
+        if futs.is_empty() {
+            return Err(anyhow!("No RPCs available to fetch block for slot {}", slot));
         }
-        Err(anyhow!("All RPCs failed to fetch block for slot {}", slot))
+
+        match select_ok(futs).await {
+            Ok((block, _remaining)) => Ok(block),
+            Err(e) => Err(anyhow!("All RPCs failed to fetch block for slot {}: {}", slot, e)),
+        }
     }
 
     // bootstrap is a heavy call, use a 12-sec timeout for it
