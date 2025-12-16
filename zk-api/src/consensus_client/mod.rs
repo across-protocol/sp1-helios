@@ -244,12 +244,19 @@ impl<S: ConsensusSpec, R: ConsensusRpc<S> + std::fmt::Debug> Client<S, R> {
             .collect();
 
         if futs.is_empty() {
-            return Err(anyhow!("No RPCs available to fetch block for slot {}", slot));
+            return Err(anyhow!(
+                "No RPCs available to fetch block for slot {}",
+                slot
+            ));
         }
 
         match select_ok(futs).await {
             Ok((block, _remaining)) => Ok(block),
-            Err(e) => Err(anyhow!("All RPCs failed to fetch block for slot {}: {}", slot, e)),
+            Err(e) => Err(anyhow!(
+                "All RPCs failed to fetch block for slot {}: {}",
+                slot,
+                e
+            )),
         }
     }
 
