@@ -167,7 +167,7 @@ impl<S: ConsensusSpec, R: ConsensusRpc<S> + std::fmt::Debug> Client<S, R> {
         // R we're using. Some R's expect these "urls" to have different meaning, e.g. it can be
         // a name of another env variable with some init params for that R in R::new
         let paths_str = env::var(CONENSUS_RPCS_ENV_VAR)
-            .expect("ConsensusRpcProxy: No RPC URLs found in environment variable");
+            .expect("Client: No RPC URLs found in environment variable");
 
         let paths: Vec<&str> = paths_str
             .split(',')
@@ -181,7 +181,7 @@ impl<S: ConsensusSpec, R: ConsensusRpc<S> + std::fmt::Debug> Client<S, R> {
     pub fn new(config: Arc<Config>, paths: &[&str]) -> Result<Self> {
         assert!(
             !paths.is_empty(),
-            "ConsensusRpcProxy: No RPC URLs found in environment variable"
+            "Client: No RPC URLs found in environment variable"
         );
 
         let rpcs: Vec<R> = paths.iter().map(|path| R::new(path)).collect();
@@ -215,6 +215,46 @@ impl<S: ConsensusSpec, R: ConsensusRpc<S> + std::fmt::Debug> Client<S, R> {
         );
 
         Ok(())
+    }
+
+    /// Get expected current slot based on current time.
+    /// Convenience method that delegates to ConfigExt.
+    pub fn expected_current_slot(&self) -> u64 {
+        self.config.expected_current_slot()
+    }
+
+    /// Fetch a beacon block by slot.
+    /// Tries primary RPC first, then falls back to backups in parallel.
+    pub async fn get_block(
+        &self,
+        slot: u64,
+    ) -> Result<helios_consensus_core::types::BeaconBlock<S>> {
+        // 1) Try the primary RPC first
+        match self.rpcs.first().unwrap().get_block(slot).await {
+            Ok(block) => return Ok(block),
+            Err(e) => {
+                warn!(
+                    target: "consensus_client::get_block",
+                    "Primary RPC failed; falling back to backups for slot {}: {}", slot, e
+                );
+            }
+        }
+
+        // 2) Build timeout-wrapped futures for all the backups
+        let tasks: Vec<_> = self
+            .rpcs
+            .iter()
+            .skip(1)
+            .map(|rpc| timeout(std::time::Duration::from_secs(5), rpc.get_block(slot)))
+            .collect();
+
+        // 3) Run them all, drop any that timed out or errored, take the first valid one
+        join_all(tasks)
+            .await
+            .into_iter()
+            .filter_map(|res| res.ok().and_then(Result::ok))
+            .next()
+            .ok_or_else(|| anyhow!("All RPCs failed to fetch block for slot {}", slot))
     }
 
     // bootstrap is a heavy call, use a 12-sec timeout for it

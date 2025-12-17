@@ -4,22 +4,9 @@ use alloy_rlp::Encodable;
 use alloy_trie::{proof, Nibbles};
 use anyhow::anyhow;
 
-use helios_consensus_core::{
-    calc_sync_period,
-    consensus_spec::{ConsensusSpec, MainnetConsensusSpec},
-    types::{BeaconBlock, Update},
-};
-use helios_ethereum::{
-    config::{checkpoints, networks::Network, Config},
-    consensus::Inner,
-};
-use helios_ethereum::{consensus::ConsensusClient, database::ConfigDB, rpc::ConsensusRpc};
-use reqwest::Url;
-use rpc_proxies::consensus::ConsensusRpcProxy;
+use helios_consensus_core::consensus_spec::MainnetConsensusSpec;
+use helios_ethereum::config::{checkpoints, networks::Network};
 use sp1_helios_primitives::types::{ContractStorage, VerifiedStorageSlot};
-use std::sync::Arc;
-use tokio::sync::{mpsc::channel, watch};
-use tracing::info;
 use tree_hash::TreeHash;
 
 pub mod api;
@@ -35,32 +22,7 @@ pub mod util;
 pub mod tracing_setup;
 pub use tracing_setup::init_tracing;
 
-use std::str::FromStr;
-
-pub const MAX_REQUEST_LIGHT_CLIENT_UPDATES: u8 = 128;
 pub const CONSENSUS_RPC_ENV_VAR: &str = "SOURCE_CONSENSUS_RPC_URL";
-
-/// Fetch updates for client
-pub async fn get_updates(
-    client: &Inner<MainnetConsensusSpec, ConsensusRpcProxy>,
-) -> Vec<Update<MainnetConsensusSpec>> {
-    try_get_updates(client).await.unwrap()
-}
-
-/// Fetch updates for client
-pub async fn try_get_updates<S: ConsensusSpec, R: ConsensusRpc<S>>(
-    client: &Inner<S, R>,
-) -> anyhow::Result<Vec<Update<S>>> {
-    let period = calc_sync_period::<S>(client.store.finalized_header.beacon().slot);
-
-    let updates = client
-        .rpc
-        .get_updates(period, MAX_REQUEST_LIGHT_CLIENT_UPDATES)
-        .await
-        .map_err(|e| anyhow::anyhow!("{}", e))?;
-
-    Ok(updates)
-}
 
 /// Fetch latest checkpoint from chain to bootstrap client to the latest state.
 /// Panics if any step fails.
@@ -97,121 +59,14 @@ pub async fn get_checkpoint(slot: u64) -> B256 {
 
 /// Fetch checkpoint from a slot number. This function only works for slots that are the 1st slot in their epoch
 pub async fn try_get_checkpoint(slot: u64) -> anyhow::Result<B256> {
-    let chain_id = std::env::var("SOURCE_CHAIN_ID")
-        .map_err(|e| anyhow::anyhow!("SOURCE_CHAIN_ID not set: {}", e))?;
-    let network = Network::from_chain_id(
-        chain_id
-            .parse()
-            .map_err(|e| anyhow::anyhow!("Invalid SOURCE_CHAIN_ID: {}", e))?,
-    )
-    .map_err(|e| anyhow::anyhow!("Unknown network for chain ID: {} . Error: {}", chain_id, e))?;
-    let base_config = network.to_base_config();
+    use consensus_client::Client;
+    use helios_ethereum::rpc::http_rpc::HttpRpc;
 
-    let config = Config {
-        // This is unused, but provide http:// format to prevent panic
-        consensus_rpc: Url::from_str("http://localhost").unwrap(),
-        execution_rpc: None,
-        chain: base_config.chain,
-        forks: base_config.forks,
-        strict_checkpoint_age: false,
-        ..Default::default()
-    };
-
-    let (block_send, _) = channel(256);
-    let (finalized_block_send, _) = watch::channel(None);
-    let (channel_send, _) = watch::channel(None);
-    let client = Inner::<MainnetConsensusSpec, ConsensusRpcProxy>::new(
-        CONSENSUS_RPC_ENV_VAR,
-        block_send,
-        finalized_block_send,
-        channel_send,
-        Arc::new(config),
-    );
-
-    let block: BeaconBlock<MainnetConsensusSpec> = client
-        .rpc
-        .get_block(slot)
-        .await
-        .map_err(|e| anyhow::anyhow!("{}", e))?;
+    // Create a Client just to fetch the block (no bootstrap/sync needed)
+    let client = Client::<MainnetConsensusSpec, HttpRpc>::from_env()?;
+    let block = client.get_block(slot).await?;
 
     Ok(B256::from_slice(block.tree_hash_root().as_ref()))
-}
-
-/// Setup a client from a checkpoint.
-pub async fn get_client<S: ConsensusSpec, R: ConsensusRpc<S>>(checkpoint: B256) -> Inner<S, R> {
-    try_get_client(checkpoint).await.unwrap()
-}
-
-/// Setup a client from a checkpoint.
-pub async fn try_get_client<S: ConsensusSpec, R: ConsensusRpc<S>>(
-    checkpoint: B256,
-) -> anyhow::Result<Inner<S, R>> {
-    let chain_id = std::env::var("SOURCE_CHAIN_ID")
-        .map_err(|e| anyhow::anyhow!("Failed to get SOURCE_CHAIN_ID: {}", e))?;
-    let network = Network::from_chain_id(
-        chain_id
-            .parse()
-            .map_err(|e| anyhow::anyhow!("Failed to parse chain_id: {}", e))?,
-    )
-    .map_err(|_| anyhow::anyhow!("Failed to get network from chain_id: {}", chain_id))?;
-    let base_config = network.to_base_config();
-
-    let config = Config {
-        // This is unused, but provide http:// format to prevent panic
-        consensus_rpc: Url::from_str("http://localhost").unwrap(),
-        execution_rpc: None,
-        chain: base_config.chain,
-        forks: base_config.forks,
-        strict_checkpoint_age: false,
-        ..Default::default()
-    };
-
-    let (block_send, _) = channel(256);
-    let (finalized_block_send, _) = watch::channel(None);
-    let (channel_send, _) = watch::channel(None);
-
-    let mut client = Inner::new(
-        CONSENSUS_RPC_ENV_VAR,
-        block_send,
-        finalized_block_send,
-        channel_send,
-        Arc::new(config),
-    );
-
-    client
-        .bootstrap(checkpoint)
-        .await
-        .map_err(|e| anyhow::anyhow!("Failed to bootstrap client with checkpoint: {}", e))?;
-
-    Ok(client)
-}
-
-/// Creates a ConsensusClient that performs auto-updates every 12 seconds. Does all the required
-/// verifications on the state applied and streams out finalized blocks
-pub async fn create_streaming_client(
-    checkpoint: B256,
-) -> ConsensusClient<MainnetConsensusSpec, ConsensusRpcProxy, ConfigDB> {
-    let consensus_rpc_str = std::env::var("SOURCE_CONSENSUS_RPC_URL").unwrap();
-    let consensus_rpc = Url::from_str(&consensus_rpc_str).unwrap();
-    let chain_id = std::env::var("SOURCE_CHAIN_ID").unwrap();
-    let network = Network::from_chain_id(chain_id.parse().unwrap()).unwrap();
-    let base_config = network.to_base_config();
-
-    let config = Config {
-        consensus_rpc: consensus_rpc.clone(),
-        execution_rpc: None,
-        chain: base_config.chain,
-        forks: base_config.forks,
-        checkpoint: Some(checkpoint),
-        strict_checkpoint_age: false,
-        ..Default::default()
-    };
-
-    info!("CONFIG: {:?}", config);
-
-    info!("config.max_checkpoint_age: {:?}", config.max_checkpoint_age);
-
-    ConsensusClient::new(&consensus_rpc, Arc::new(config)).unwrap()
 }
 
 /**

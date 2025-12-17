@@ -4,8 +4,10 @@ use anyhow::Result;
 /// Generate genesis parameters for light client contract
 use clap::Parser;
 use helios_consensus_core::consensus_spec::MainnetConsensusSpec;
+use helios_ethereum::rpc::http_rpc::HttpRpc;
 use serde::{Deserialize, Serialize};
-use sp1_helios_api::{get_checkpoint, get_client, get_latest_checkpoint, rpc_proxies};
+use sp1_helios_api::consensus_client::Client;
+use sp1_helios_api::{get_checkpoint, get_latest_checkpoint};
 use sp1_sdk::{utils, HashableKey, Prover, ProverClient};
 use std::{
     env, fs,
@@ -79,22 +81,19 @@ pub async fn main() -> Result<()> {
         vkey_updater = env::var("VKEY_UPDATER").unwrap().parse().unwrap();
     }
 
-    let helios_client =
-        get_client::<MainnetConsensusSpec, rpc_proxies::consensus::ConsensusRpcProxy>(checkpoint)
-            .await;
-    let finalized_header = helios_client
+    // Create a Client and sync to the checkpoint
+    let mut client = Client::<MainnetConsensusSpec, HttpRpc>::from_env()?;
+    client.sync(checkpoint).await?;
+
+    let finalized_header = client
         .store
         .finalized_header
         .clone()
         .beacon()
         .tree_hash_root();
-    let head = helios_client.store.finalized_header.clone().beacon().slot;
-    let sync_committee_hash = helios_client
-        .store
-        .current_sync_committee
-        .clone()
-        .tree_hash_root();
-    let genesis_time = helios_client.config.chain.genesis_time;
+    let head = client.store.finalized_header.clone().beacon().slot;
+    let sync_committee_hash = client.store.current_sync_committee.clone().tree_hash_root();
+    let genesis_time = client.config.chain.genesis_time;
     const SECONDS_PER_SLOT: u64 = 12;
     const SLOTS_PER_EPOCH: u64 = 32;
     const SLOTS_PER_PERIOD: u64 = SLOTS_PER_EPOCH * 256;
@@ -118,7 +117,7 @@ pub async fn main() -> Result<()> {
     genesis_config.header = format!("0x{:x}", finalized_header);
     genesis_config.execution_state_root = format!(
         "0x{:x}",
-        helios_client
+        client
             .store
             .finalized_header
             .execution()

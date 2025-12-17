@@ -18,7 +18,8 @@
   ],
   "rust-analyzer.linkedProjects": [
     "program/Cargo.toml",
-    "script/Cargo.toml",
+    "cli/Cargo.toml",
+    "zk-api/Cargo.toml",
     "primitives/Cargo.toml"
   ],
   "rust-analyzer.showUnlinkedFileNotification": false
