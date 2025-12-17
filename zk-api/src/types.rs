@@ -6,7 +6,6 @@ use anyhow::anyhow;
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use sp1_helios_primitives::types::{ContractStorage, StorageSlot};
 use thiserror::Error;
-use tracing::error;
 use utoipa::ToSchema;
 
 /// Unique identifier for a proof request, derived from the Keccak256 hash of its RLP-encoded content.
@@ -123,6 +122,12 @@ pub enum ProofServiceError {
 
     #[error("Proof generation failed for ID {0}: {1}")]
     ProofGenerationFailed(ProofId, String),
+
+    #[error("Bad request: {0}")]
+    BadRequest(String),
+
+    #[error("Vkey mismatch: {0}")]
+    VkeyMismatch(String),
 
     #[error("Internal service error: {0}")]
     Internal(String),
