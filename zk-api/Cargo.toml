@@ -1,33 +1,12 @@
 [package]
 version = "0.1.0"
-name = "sp1-helios-script"
+name = "zk-api"
 edition.workspace = true
 license.workspace = true
 authors.workspace = true
 
-[[bin]]
-name = "genesis"
-path = "./bin/genesis.rs"
-
-[[bin]]
-name = "operator"
-path = "./bin/operator.rs"
-
-[[bin]]
-name = "service"
-path = "./bin/service.rs"
-
-[[bin]]
-name = "test"
-path = "./bin/test.rs"
-
-[[bin]]
-name = "vkey"
-path = "./bin/vkey.rs"
-
-[[bin]]
-name = "play"
-path = "./bin/play.rs"
+[lib]
+name = "sp1_helios_api"
 
 [dependencies]
 dotenv = { workspace = true }

@@ -1,10 +1,10 @@
 use anyhow::Context;
-use sp1_helios_script::proof_backends::sp1::SP1Backend;
-use sp1_helios_script::{init_tracing, tracing_setup};
+use sp1_helios_api::proof_backends::sp1::SP1Backend;
+use sp1_helios_api::{init_tracing, tracing_setup};
 use tracing::error;
 
-use sp1_helios_script::api::start_api_server;
-use sp1_helios_script::proof_service::ProofService;
+use sp1_helios_api::api::start_api_server;
+use sp1_helios_api::proof_service::ProofService;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -16,7 +16,7 @@ async fn main() -> anyhow::Result<()> {
 
     let _api_task_handle = start_api_server(proof_service.clone()).await;
 
-    if let Err(e) = sp1_helios_script::proof_service::run(proof_service).await {
+    if let Err(e) = sp1_helios_api::proof_service::run(proof_service).await {
         error!("Error running proof service: {:#}", e);
         tracing_setup::slack::flush().await;
         return Err(e);
