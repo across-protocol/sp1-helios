@@ -141,29 +141,6 @@ pub async fn main() -> Result<()> {
             .workspace_root,
     );
 
-    // Create a new genesis config with default values
-    let mut genesis_config: GenesisConfig = GenesisConfig::default();
-
-    genesis_config.genesis_time = genesis_time;
-    genesis_config.seconds_per_slot = SECONDS_PER_SLOT;
-    genesis_config.slots_per_period = SLOTS_PER_PERIOD;
-    genesis_config.slots_per_epoch = SLOTS_PER_EPOCH;
-    genesis_config.sync_committee_hash = format!("0x{:x}", sync_committee_hash);
-    genesis_config.header = format!("0x{:x}", finalized_header);
-    genesis_config.execution_state_root = format!(
-        "0x{:x}",
-        helios_client
-            .store
-            .finalized_header
-            .execution()
-            .expect("Execution payload doesn't exist.")
-            .state_root()
-    );
-    genesis_config.head = head;
-    genesis_config.helios_program_vkey = vk.bytes32();
-    genesis_config.verifier = format!("0x{:x}", verifier);
-    genesis_config.vkey_updater = format!("0x{:x}", vkey_updater);
-
     // Get the account associated with the private key.
     let private_key = env::var("PRIVATE_KEY").expect("PRIVATE_KEY not set in .env file");
     let signer: PrivateKeySigner = private_key.parse().expect("Failed to parse private key");
@@ -190,7 +167,29 @@ pub async fn main() -> Result<()> {
         _ => vec![format!("0x{:x}", deployer_address)],
     };
 
-    genesis_config.updaters = updaters;
+    // Create genesis config with all values
+    let genesis_config = GenesisConfig {
+        genesis_time,
+        seconds_per_slot: SECONDS_PER_SLOT,
+        slots_per_period: SLOTS_PER_PERIOD,
+        slots_per_epoch: SLOTS_PER_EPOCH,
+        sync_committee_hash: format!("0x{:x}", sync_committee_hash),
+        header: format!("0x{:x}", finalized_header),
+        execution_state_root: format!(
+            "0x{:x}",
+            helios_client
+                .store
+                .finalized_header
+                .execution()
+                .expect("Execution payload doesn't exist.")
+                .state_root()
+        ),
+        head,
+        helios_program_vkey: vk.bytes32(),
+        verifier: format!("0x{:x}", verifier),
+        vkey_updater: format!("0x{:x}", vkey_updater),
+        updaters,
+    };
 
     write_genesis_config(&workspace_root, &genesis_config, args.out)?;
 
