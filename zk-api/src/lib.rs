@@ -22,8 +22,6 @@ pub mod util;
 pub mod tracing_setup;
 pub use tracing_setup::init_tracing;
 
-pub const CONSENSUS_RPC_ENV_VAR: &str = "SOURCE_CONSENSUS_RPC_URL";
-
 /// Fetch latest checkpoint from chain to bootstrap client to the latest state.
 /// Panics if any step fails.
 pub async fn get_latest_checkpoint() -> B256 {
