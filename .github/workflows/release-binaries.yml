@@ -1,0 +1,140 @@
+name: release-binaries
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+env:
+  CRATE_PATH: ./cli
+  BIN_NAME: genesis
+
+jobs:
+  linux:
+    runs-on: ubuntu-22.04
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-gnu
+            out_name: amd64_linux
+          # - target: aarch64-unknown-linux-gnu
+          #   out_name: arm64_linux
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      # Make sure we have modern C++17 cross compilers on Linux
+      - name: Install modern GCC for C++17 (jammy)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            gcc-12 g++-12 \
+            gcc-12-aarch64-linux-gnu g++-12-aarch64-linux-gnu
+
+      - name: Build (release)
+        working-directory: ${{ env.CRATE_PATH }}
+        env:
+          CC_x86_64_unknown_linux_gnu: gcc-12
+          CXX_x86_64_unknown_linux_gnu: g++-12
+          CXXFLAGS_x86_64_unknown_linux_gnu: -std=gnu++17
+          CC_aarch64_unknown_linux_gnu: aarch64-linux-gnu-gcc-12
+          CXX_aarch64_unknown_linux_gnu: aarch64-linux-gnu-g++-12
+          CXXFLAGS_aarch64_unknown_linux_gnu: -std=gnu++17
+          SP1_SKIP_PROGRAM_BUILD: true
+        run: |
+          cargo build --bin ${BIN_NAME} --release --target ${{ matrix.target }}
+
+      - name: Rename binary
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          echo "VERSION=$VERSION" >> $GITHUB_ENV
+          SRC="target/${{ matrix.target }}/release/${{ env.BIN_NAME }}"
+          DEST="dist/${{ env.BIN_NAME }}_${VERSION}_${{ matrix.out_name }}"
+          mkdir -p dist
+          chmod +x "$SRC"
+          cp -f "$SRC" "$DEST"
+
+      - name: Upload to Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          files: dist/${{ env.BIN_NAME }}_${{ env.VERSION }}_${{ matrix.out_name }}
+
+  # macos-x86_64:
+  #   runs-on: macos-13 # Intel runner
+  #   steps:
+  #     - uses: actions/checkout@v4
+  #     - uses: dtolnay/rust-toolchain@stable
+  #       with:
+  #         targets: x86_64-apple-darwin
+
+  #     - name: Build (release)
+  #       working-directory: ${{ env.CRATE_PATH }}
+  #       env:
+  #         CC_x86_64_apple_darwin: clang
+  #         CXX_x86_64_apple_darwin: clang++
+  #         CXXFLAGS_x86_64_apple_darwin: -std=c++17
+  #         CARGO_TARGET_DIR: ${{ github.workspace }}/target/${{ runner.os }}-x86_64-apple-darwin-${{ github.run_id }}
+  #         CARGO_BUILD_JOBS: "1"
+  #         SP1_SKIP_PROGRAM_BUILD: true
+  #       run: |
+  #         cargo build --bin ${BIN_NAME} --release --target x86_64-apple-darwin
+
+  #     - name: Rename binary
+  #       run: |
+  #         VERSION="${GITHUB_REF_NAME#v}"
+  #         echo "VERSION=$VERSION" >> $GITHUB_ENV
+  #         SRC=${{ github.workspace }}/target/${{ runner.os }}-x86_64-apple-darwin-${{ github.run_id }}/x86_64-apple-darwin/release/${{ env.BIN_NAME }}
+  #         DEST="dist/${{ env.BIN_NAME }}_${VERSION}_amd64_darwin"
+  #         mkdir -p dist
+  #         chmod +x "$SRC"
+  #         cp -f "$SRC" "$DEST"
+
+  #     - name: Upload to Release
+  #       uses: softprops/action-gh-release@v2
+  #       with:
+  #         tag_name: ${{ github.ref_name }}
+  #         files: dist/${{ env.BIN_NAME }}_${{ env.VERSION }}_amd64_darwin
+
+  macos-arm64:
+    runs-on: macos-14 # Apple Silicon runner
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin
+
+      - name: Build (release)
+        working-directory: ${{ env.CRATE_PATH }}
+        env:
+          CC_aarch64_apple_darwin: clang
+          CXX_aarch64_apple_darwin: clang++
+          CXXFLAGS_aarch64_apple_darwin: -std=c++17
+          CARGO_TARGET_DIR: ${{ github.workspace }}/target/${{ runner.os }}-aarch64-apple-darwin-${{ github.run_id }}
+          CARGO_BUILD_JOBS: "1"
+          SP1_SKIP_PROGRAM_BUILD: true
+        run: |
+          cargo build --bin ${BIN_NAME} --release --target aarch64-apple-darwin
+
+      - name: Rename binary
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          echo "VERSION=$VERSION" >> $GITHUB_ENV
+          SRC=${{ github.workspace }}/target/${{ runner.os }}-aarch64-apple-darwin-${{ github.run_id }}/aarch64-apple-darwin/release/${{ env.BIN_NAME }}
+          DEST="dist/${{ env.BIN_NAME }}_${VERSION}_arm64_darwin"
+          mkdir -p dist
+          chmod +x "$SRC"
+          cp -f "$SRC" "$DEST"
+
+      - name: Upload to Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          files: dist/${{ env.BIN_NAME }}_${{ env.VERSION }}_arm64_darwin
