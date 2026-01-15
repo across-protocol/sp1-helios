@@ -138,3 +138,32 @@ jobs:
         with:
           tag_name: ${{ github.ref_name }}
           files: dist/${{ env.BIN_NAME }}_${{ env.VERSION }}_arm64_darwin
+
+  checksums:
+    needs: [linux, macos-arm64]
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Download release assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p dist
+          cd dist
+          # Download all genesis binaries from the release
+          gh release download ${{ github.ref_name }} \
+            --repo ${{ github.repository }} \
+            --pattern "${{ env.BIN_NAME }}_*"
+
+      - name: Generate SHA256 checksums
+        run: |
+          cd dist
+          # Generate checksums for all binaries
+          sha256sum ${{ env.BIN_NAME }}_* > SHA256SUMS
+          echo "Generated checksums:"
+          cat SHA256SUMS
+
+      - name: Upload checksums to Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          files: dist/SHA256SUMS
