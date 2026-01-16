@@ -154,16 +154,27 @@ jobs:
             --repo ${{ github.repository }} \
             --pattern "${{ env.BIN_NAME }}_*"
 
-      - name: Generate SHA256 checksums
+      - name: Generate SHA256 checksums (JSON)
         run: |
           cd dist
-          # Generate checksums for all binaries
-          sha256sum ${{ env.BIN_NAME }}_* > SHA256SUMS
+          echo "{" > checksums.json
+          first=true
+          for file in ${{ env.BIN_NAME }}_*; do
+            hash=$(sha256sum "$file" | awk '{print $1}')
+            if [ "$first" = true ]; then
+              first=false
+            else
+              echo "," >> checksums.json
+            fi
+            printf '  "%s": "%s"' "$file" "$hash" >> checksums.json
+          done
+          echo "" >> checksums.json
+          echo "}" >> checksums.json
           echo "Generated checksums:"
-          cat SHA256SUMS
+          cat checksums.json
 
       - name: Upload checksums to Release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ github.ref_name }}
-          files: dist/SHA256SUMS
+          files: dist/checksums.json
