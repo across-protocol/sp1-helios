@@ -8,66 +8,83 @@ use anyhow::{anyhow, Context, Result};
 use async_trait::async_trait;
 use sp1_helios_primitives::types::ProofInputs;
 use sp1_sdk::{
-    network::FulfillmentStrategy, EnvProver, HashableKey, ProverClient, SP1ProofWithPublicValues,
-    SP1ProvingKey, SP1Stdin,
+    network::FulfillmentStrategy, EnvProver, HashableKey, NetworkProver, ProverClient,
+    SP1ProofWithPublicValues, SP1ProvingKey, SP1Stdin,
 };
-use std::{str::FromStr, sync::Arc};
+use std::{env, str::FromStr, sync::Arc};
 use tracing::{debug, info};
 
 use super::ProofBackend;
 
 const ELF: &[u8] = include_bytes!("../../../elf/sp1-helios-elf");
 
-/// Default whitelist of reliable provers on the Succinct Prover Network.
-/// These addresses are recommended by Succinct to ensure proof requests are fulfilled reliably.
+/// Environment variable for configuring whitelisted provers on the Succinct Prover Network.
+/// Expects a comma-separated list of addresses.
 /// See: https://docs.succinct.xyz/docs/sp1/prover-network/advanced-usage#whitelist
-const PROVER_WHITELIST: &[&str] = &[
-    "0xD4FCFCE0DEE91A9895C3AD71A6248D57C287A4F5",
-    "0xB3780A2BBBC20A36C86DA1BF4FA0B0D3C4B60DCF",
-    "0x22F87C35B900B117C19CC4C9CA6A9F59FB38FA4D",
-    "0xE6B2B50B3EBA1EFF48B360D636D673459FF5B5E3",
-    "0x546239E8539CE944120CDE00CC1F5338010E4A42",
-    "0x6F7F48E0A79B607061ACB09FA2C0893973A988D5",
-    "0x25204CC3D0F55AEF52936055E4E225DBD611F815",
-    "0x3D008BDB990E69C40AFB6AA7161C91E82F0FA125",
-    "0x4EAC32F0A25EA9D7F22D1AA40735CB761C672BD6",
-    "0x5A00604BF1832E79713ABA108622C18A1F1A4349",
-    "0x5380D2BD50FD183B0D5D24888E05DFD4DD7D7E4D",
-    "0x05CE8CB29375858C5C9010423C43007181453766",
-];
+const PROVER_WHITELIST_ENV_VAR: &str = "SP1_PROVER_WHITELIST";
 
-/// Parses the prover whitelist addresses into a vector of `Address`.
-fn get_prover_whitelist() -> Vec<Address> {
-    PROVER_WHITELIST
-        .iter()
-        .map(|addr| Address::from_str(addr).expect("Invalid prover whitelist address"))
-        .collect()
+/// Parses the prover whitelist from the SP1_PROVER_WHITELIST environment variable.
+/// Returns None if the env var is not set or empty (uses SDK default behavior).
+fn get_prover_whitelist() -> Option<Vec<Address>> {
+    let whitelist_str = env::var(PROVER_WHITELIST_ENV_VAR).ok()?;
+    if whitelist_str.trim().is_empty() {
+        return None;
+    }
+
+    let addresses: Vec<Address> = whitelist_str
+        .split(',')
+        .map(|addr| {
+            let trimmed = addr.trim();
+            Address::from_str(trimmed)
+                .unwrap_or_else(|_| panic!("Invalid address in {}: {}", PROVER_WHITELIST_ENV_VAR, trimmed))
+        })
+        .collect();
+
+    Some(addresses)
+}
+
+/// Returns true if SP1_PROVER is set to "network"
+fn is_network_prover() -> bool {
+    env::var("SP1_PROVER")
+        .map(|v| v.to_lowercase() == "network")
+        .unwrap_or(false)
 }
 
 /// An implementation of `ProofBackend` using the SP1 prover.
+/// Supports multiple prover modes via SP1_PROVER env var (network, cpu, mock, cuda).
+/// When SP1_PROVER=network, uses NetworkProver with whitelisted provers.
 #[derive(Clone)]
 pub struct SP1Backend {
-    prover_client: Arc<EnvProver>,
+    env_prover: Arc<EnvProver>,
+    network_prover: Option<Arc<NetworkProver>>,
     proving_key: Arc<SP1ProvingKey>,
 }
 
 impl SP1Backend {
-    // todo: can improve env configurability here
     pub fn from_env() -> Result<Self> {
         info!(target: "sp1_backend::init", "Initializing SP1Backend...");
 
         // Initialize prover client from environment variables
-        let prover_client = Arc::new(ProverClient::from_env());
+        let env_prover = Arc::new(ProverClient::from_env());
         info!(target: "sp1_backend::init", "SP1 ProverClient created from environment.");
 
         // Setup proving and verification keys
-        // Note: This can be computationally intensive
         info!(target: "sp1_backend::init", "Setting up SP1 proving and verification keys...");
-        let (pk, _vk) = prover_client.setup(ELF);
+        let (pk, _vk) = env_prover.setup(ELF);
         info!(target: "sp1_backend::init", "SP1 keys setup complete.");
 
+        // Create NetworkProver if SP1_PROVER=network for whitelist support
+        let network_prover = if is_network_prover() {
+            info!(target: "sp1_backend::init", "Network prover detected, enabling whitelist support.");
+            Some(Arc::new(ProverClient::builder().network().build()))
+        } else {
+            info!(target: "sp1_backend::init", "Using non-network prover mode.");
+            None
+        };
+
         Ok(Self {
-            prover_client,
+            env_prover,
+            network_prover,
             proving_key: Arc::new(pk),
         })
     }
@@ -82,23 +99,38 @@ impl SP1Backend {
         Ok(stdin)
     }
 
-    /// Runs the SP1 prover in a blocking thread.
+    /// Runs the SP1 prover. Uses NetworkProver with whitelist when SP1_PROVER=network,
+    /// otherwise falls back to EnvProver for local/mock proving.
     async fn run_sp1_prover(&self, stdin: SP1Stdin) -> Result<SP1ProofWithPublicValues> {
-        let prover_client = self.prover_client.clone();
-        let proving_key = self.proving_key.clone();
-        let whitelist = get_prover_whitelist();
+        // Use NetworkProver with whitelist if available (SP1_PROVER=network)
+        if let Some(network_prover) = &self.network_prover {
+            let whitelist = get_prover_whitelist();
+            if let Some(ref wl) = whitelist {
+                debug!(target: "sp1_backend::prove", "Using NetworkProver with {} whitelisted provers.", wl.len());
+            } else {
+                debug!(target: "sp1_backend::prove", "Using NetworkProver with SDK default whitelist.");
+            }
 
-        debug!(target: "sp1_backend::prove", "Spawning blocking task for SP1 proof generation.");
-        // Execute the potentially long-running prover logic in a blocking thread
-        let result = tokio::task::spawn_blocking(move || {
-            prover_client
-                .prove(&proving_key, &stdin)
+            return network_prover
+                .prove(&self.proving_key, &stdin)
                 .groth16()
                 .strategy(FulfillmentStrategy::Auction)
-                .whitelist(Some(whitelist))
-                .run()
-        })
-        .await;
+                .whitelist(whitelist)
+                .run_async()
+                .await
+                .context("SP1 network prover run failed");
+        }
+
+        // Fall back to EnvProver for non-network modes (cpu, mock, cuda)
+        debug!(target: "sp1_backend::prove", "Using EnvProver (non-network mode).");
+        let env_prover = self.env_prover.clone();
+        let proving_key = self.proving_key.clone();
+
+        let result: Result<Result<SP1ProofWithPublicValues, _>, _> =
+            tokio::task::spawn_blocking(move || {
+                env_prover.prove(&proving_key, &stdin).groth16().run()
+            })
+            .await;
 
         // todo: Is this meaningful error handling? I feel like we should only have 1 error arm. Flatten errors?
         match result {
