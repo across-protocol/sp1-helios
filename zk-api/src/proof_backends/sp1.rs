@@ -3,19 +3,46 @@
 use crate::{
     types::SP1HeliosProofData, // Concrete ProofOutput type
 };
-use alloy_primitives::hex;
+use alloy_primitives::{hex, Address};
 use anyhow::{anyhow, Context, Result};
 use async_trait::async_trait;
 use sp1_helios_primitives::types::ProofInputs;
 use sp1_sdk::{
-    EnvProver, HashableKey, ProverClient, SP1ProofWithPublicValues, SP1ProvingKey, SP1Stdin,
+    network::FulfillmentStrategy, EnvProver, HashableKey, ProverClient, SP1ProofWithPublicValues,
+    SP1ProvingKey, SP1Stdin,
 };
-use std::sync::Arc;
+use std::{str::FromStr, sync::Arc};
 use tracing::{debug, info};
 
 use super::ProofBackend;
 
 const ELF: &[u8] = include_bytes!("../../../elf/sp1-helios-elf");
+
+/// Default whitelist of reliable provers on the Succinct Prover Network.
+/// These addresses are recommended by Succinct to ensure proof requests are fulfilled reliably.
+/// See: https://docs.succinct.xyz/docs/sp1/prover-network/advanced-usage#whitelist
+const PROVER_WHITELIST: &[&str] = &[
+    "0xD4FCFCE0DEE91A9895C3AD71A6248D57C287A4F5",
+    "0xB3780A2BBBC20A36C86DA1BF4FA0B0D3C4B60DCF",
+    "0x22F87C35B900B117C19CC4C9CA6A9F59FB38FA4D",
+    "0xE6B2B50B3EBA1EFF48B360D636D673459FF5B5E3",
+    "0x546239E8539CE944120CDE00CC1F5338010E4A42",
+    "0x6F7F48E0A79B607061ACB09FA2C0893973A988D5",
+    "0x25204CC3D0F55AEF52936055E4E225DBD611F815",
+    "0x3D008BDB990E69C40AFB6AA7161C91E82F0FA125",
+    "0x4EAC32F0A25EA9D7F22D1AA40735CB761C672BD6",
+    "0x5A00604BF1832E79713ABA108622C18A1F1A4349",
+    "0x5380D2BD50FD183B0D5D24888E05DFD4DD7D7E4D",
+    "0x05CE8CB29375858C5C9010423C43007181453766",
+];
+
+/// Parses the prover whitelist addresses into a vector of `Address`.
+fn get_prover_whitelist() -> Vec<Address> {
+    PROVER_WHITELIST
+        .iter()
+        .map(|addr| Address::from_str(addr).expect("Invalid prover whitelist address"))
+        .collect()
+}
 
 /// An implementation of `ProofBackend` using the SP1 prover.
 #[derive(Clone)]
@@ -59,11 +86,17 @@ impl SP1Backend {
     async fn run_sp1_prover(&self, stdin: SP1Stdin) -> Result<SP1ProofWithPublicValues> {
         let prover_client = self.prover_client.clone();
         let proving_key = self.proving_key.clone();
+        let whitelist = get_prover_whitelist();
 
         debug!(target: "sp1_backend::prove", "Spawning blocking task for SP1 proof generation.");
         // Execute the potentially long-running prover logic in a blocking thread
         let result = tokio::task::spawn_blocking(move || {
-            prover_client.prove(&proving_key, &stdin).groth16().run()
+            prover_client
+                .prove(&proving_key, &stdin)
+                .groth16()
+                .strategy(FulfillmentStrategy::Auction)
+                .whitelist(Some(whitelist))
+                .run()
         })
         .await;
 
