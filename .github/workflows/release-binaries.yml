@@ -67,6 +67,18 @@ jobs:
           tag_name: ${{ github.ref_name }}
           files: dist/${{ env.BIN_NAME }}_${{ env.VERSION }}_${{ matrix.out_name }}
 
+      - name: Compute and upload checksum
+        run: |
+          FILE="dist/${{ env.BIN_NAME }}_${{ env.VERSION }}_${{ matrix.out_name }}"
+          HASH=$(sha256sum "$FILE" | awk '{print $1}')
+          echo "${{ env.BIN_NAME }}_${{ env.VERSION }}_${{ matrix.out_name }} $HASH" > checksum-${{ matrix.out_name }}.txt
+
+      - name: Upload checksum artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: checksum-${{ matrix.out_name }}
+          path: checksum-${{ matrix.out_name }}.txt
+
   # macos-x86_64:
   #   runs-on: macos-13 # Intel runner
   #   steps:
@@ -138,3 +150,50 @@ jobs:
         with:
           tag_name: ${{ github.ref_name }}
           files: dist/${{ env.BIN_NAME }}_${{ env.VERSION }}_arm64_darwin
+
+      - name: Compute and upload checksum
+        run: |
+          FILE="dist/${{ env.BIN_NAME }}_${{ env.VERSION }}_arm64_darwin"
+          HASH=$(shasum -a 256 "$FILE" | awk '{print $1}')
+          echo "${{ env.BIN_NAME }}_${{ env.VERSION }}_arm64_darwin $HASH" > checksum-arm64_darwin.txt
+
+      - name: Upload checksum artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: checksum-arm64_darwin
+          path: checksum-arm64_darwin.txt
+
+  checksums:
+    needs: [linux, macos-arm64]
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Download checksum artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: checksums
+          pattern: checksum-*
+          merge-multiple: true
+
+      - name: Generate SHA256 checksums (JSON)
+        run: |
+          echo "{" > checksums.json
+          first=true
+          for file in checksums/checksum-*.txt; do
+            read -r filename hash < "$file"
+            if [ "$first" = true ]; then
+              first=false
+            else
+              echo "," >> checksums.json
+            fi
+            printf '  "%s": "%s"' "$filename" "$hash" >> checksums.json
+          done
+          echo "" >> checksums.json
+          echo "}" >> checksums.json
+          echo "Generated checksums:"
+          cat checksums.json
+
+      - name: Upload checksums to Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          files: checksums.json
