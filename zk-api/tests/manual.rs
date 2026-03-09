@@ -1,5 +1,19 @@
-//! Manual dev tests requiring external services (Redis, RPC).
-//! Run with: cargo test -p zk-api -- --ignored
+//! Manual dev utilities for inspecting live chain data and Redis state.
+//! These are `#[ignore]`d tests meant to be run individually with `--nocapture`.
+//!
+//! # Setup
+//!   Requires `.env` at the workspace root (see `.env.example`).
+//!   Redis tests need a running Redis instance (`REDIS_URL`).
+//!   RPC tests need valid `SOURCE_EXECUTION_RPC_URL` (comma-separated list OK, first is used).
+//!
+//! # Usage
+//! ```sh
+//! # Run a single test with output:
+//! cargo test -p zk-api --test manual read_storage_slot -- --ignored --nocapture
+//!
+//! # Run all manual tests:
+//! cargo test -p zk-api --test manual -- --ignored --nocapture
+//! ```
 
 use alloy::{
     eips::BlockId,
@@ -14,6 +28,16 @@ use tree_hash::TreeHash;
 
 fn load_env() {
     dotenv::dotenv().ok();
+}
+
+/// Returns the first URL from the comma-separated `SOURCE_EXECUTION_RPC_URL`.
+fn execution_rpc_url() -> String {
+    let raw = env::var("SOURCE_EXECUTION_RPC_URL").expect("SOURCE_EXECUTION_RPC_URL not set");
+    raw.split(',')
+        .next()
+        .expect("SOURCE_EXECUTION_RPC_URL is empty")
+        .trim()
+        .to_string()
 }
 
 // ---- Redis tests ----
@@ -53,8 +77,7 @@ fn calculate_mapping_slot(mapping_slot: u64, key: u64) -> B256 {
 }
 
 async fn get_storage_at(contract: Address, slot: B256) -> Result<Bytes> {
-    let rpc = env::var("SOURCE_EXECUTION_RPC_URL")
-        .context("SOURCE_EXECUTION_RPC_URL not set")?;
+    let rpc = execution_rpc_url();
     let provider = ProviderBuilder::new().connect_http(rpc.parse()?);
     let value = provider
         .get_storage_at(contract, U256::from_be_bytes(slot.into()))
@@ -84,7 +107,7 @@ async fn read_storage_slot() {
 async fn get_storage_proof() {
     load_env();
 
-    let rpc = env::var("SOURCE_EXECUTION_RPC_URL").expect("SOURCE_EXECUTION_RPC_URL not set");
+    let rpc = execution_rpc_url();
     let provider = ProviderBuilder::new().connect_http(rpc.parse().unwrap());
 
     let contract = address!("0xdD6Fa55b12aA2a937BA053d610D76f20cC235c09");
