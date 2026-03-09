@@ -1,40 +1,34 @@
 # SP1 Helios
 
-## Overview
+Extends [SP1 Helios](https://succinctlabs.github.io/sp1-helios/) to support proving source chain contract storage slots, in addition to consensus transitions. Messages can be stored on the source chain and proved on the destination chain, effectively creating a ZK-powered message bridge.
 
-_This fork_:
-Extends SP1 Helios to support proving source chain contract storage slots, in addition to consensus transitions. Messages can be stored on the source chain and proved on the destination chain, effectively creating a ZK-powered message bridge.
+## Architecture
 
-_Original_:
-SP1 Helios verifies the consensus of a source chain in the execution environment of a destination chain. For example, you can run an SP1 Helios light client on Polygon that verifies Ethereum Mainnet's consensus.
+- **program/** — SP1 ZK program (guest code). Verifies beacon chain sync committee updates, finality, and storage proofs.
+- **zk-api/** — Axum server that tracks the beacon chain and dispatches proof requests to Succinct's prover network. Uses Redis for state.
+- **primitives/** — Shared types (`ProofInputs`, `ProofOutputs`, `StorageSlot`, etc.)
+- **elf/** — Pre-built ZK program binary.
+- **cli/** — `genesis` (initial contract state) and `vkey` (verification key) binaries.
 
-[Docs](https://succinctlabs.github.io/sp1-helios/)
+## Quick Start
 
-## Deploying a new SP1Helios contract
+```bash
+# Build
+cargo build
 
-```
-# (from root) Load environment variables
-source .env
+# Run ZK-API (needs .env)
+cargo run --bin sp1-helios-api
 
-cd contracts
+# Generate genesis state
+cargo run --bin genesis -- --slot <SLOT>
 
-# Install dependencies
-forge install
+# Print vkey
+cargo run --bin vkey
 
-# Deploy contract
-forge script script/Deploy.s.sol --ffi --rpc-url bsc --broadcast --verify
-```
-
-You can also pass the RPC URL and etherscan API key as arguments to the script:
-
-```
-forge script script/Deploy.s.sol --ffi --rpc-url $DEST_RPC_URL --etherscan-api-key $ETHERSCAN_API_KEY --broadcast --verify
+# Rebuild ELF (requires sp1 toolchain + Docker)
+just update-elf
 ```
 
-## Verify the contract
+## Environment
 
-For Plasma chain you need the following comamnd to verify the contract:
-
-```
-forge verify-contract <CONTRACT_ADDRESS> src/SP1Helios.sol:SP1Helios --verifier-url 'https://api.routescan.io/v2/network/mainnet/evm/9745/etherscan'
-```
+Copy `.env.example` to `.env` and fill in RPC URLs and Redis config. See `.env.example` for all variables.
