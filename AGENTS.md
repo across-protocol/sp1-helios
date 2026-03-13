@@ -69,6 +69,23 @@ cargo clippy --all-features --all-targets
 - **elf.yml** — Rebuild ELF in Docker, verify no diff (reproducibility check)
 - **release-binaries.yml** — Cross-platform binary releases on tag push
 
+## SP1 Version Pinning
+
+The SP1 toolchain version is pinned in multiple places that **must be updated together**. Currently `5.2.1`.
+
+| File | Line(s) | What to update |
+|------|---------|----------------|
+| `Cargo.toml` | `sp1-sdk = { version = "5.2.1", ... }` | Workspace dependency version |
+| `Cargo.toml` | `sp1-build = "5.2.1"` | Workspace dependency version |
+| `program/Cargo.toml` | `sp1-zkvm = "5.2.1"` | Direct dependency (not workspace — runs inside ZK VM) |
+| `zk-api/build.rs` | `tag: "v5.2.1".into()` | Docker image tag for reproducible ELF build |
+| `justfile` | `--tag v5.2.1` in `update-elf` recipe | Docker image tag for local ELF rebuild |
+| `.github/workflows/elf.yml` | `sp1up --version 5.2.1` | SP1 toolchain install in CI |
+| `.github/workflows/elf.yml` | `--tag v5.2.1` in `cargo-prove prove build` | Docker image tag in CI ELF build |
+| `CLAUDE.md` / `AGENTS.md` | Multiple references | Documentation (build commands, dependency table) |
+
+After updating all of the above, run `cargo update` to refresh `Cargo.lock` and `just update-elf` to rebuild the ELF binary.
+
 ## Environment
 
 See `.env.example`. Key vars: `SOURCE_CONSENSUS_RPC_URL`, `SOURCE_EXECUTION_RPC_URL`, `REDIS_URL`, `SP1_PROVER` (mock/network).
