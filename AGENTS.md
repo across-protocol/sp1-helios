@@ -17,7 +17,7 @@ Client → ZK-API (Axum + Redis) → SP1 Prover Network → Proof
 - `proof_service.rs` — Core loop: fetch requests, wait for finality, generate proofs
 - `proof_backends/sp1.rs` — SP1 network integration
 - `redis_store.rs` — Proof state persistence
-- `consensus.rs` — Beacon chain client (wraps Helios)
+- `consensus_client/mod.rs` — Beacon chain client (wraps Helios)
 
 **Primitives** (`primitives/`) — Shared types: `ProofInputs`, `ProofOutputs`, `StorageSlot`, `ContractStorage`.
 
@@ -43,7 +43,7 @@ just update-elf
 cargo run --bin sp1-helios-api
 
 # Generate genesis state
-cargo run --bin genesis -- --slot <SLOT>
+cargo run --bin genesis -- --slot <SLOT> --env-file <PATH_TO_ENV> --out <OUT>
 
 # Print vkey
 cargo run --bin vkey
