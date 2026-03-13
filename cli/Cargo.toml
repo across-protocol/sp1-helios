@@ -13,10 +13,6 @@ path = "bin/genesis.rs"
 name = "vkey"
 path = "bin/vkey.rs"
 
-[[bin]]
-name = "play"
-path = "bin/play.rs"
-
 [dependencies]
 # Internal dependencies
 sp1_helios_api = { path = "../zk-api", package = "zk-api" }
