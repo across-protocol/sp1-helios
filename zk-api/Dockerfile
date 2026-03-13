@@ -38,10 +38,9 @@ COPY cli ./cli
 # elf is required during build, as it's included by a build-time macro include_bytes! in proof_service.rs
 COPY elf ./elf
 
-# todo: copying full program/ and test/ to keep root Cargo.toml happy. They're not in the service
-# dependency graph. Maybe we can somehow avoid copying full folders here?
+# todo: copying full program/ to keep root Cargo.toml happy. It's not in the service
+# dependency graph. Maybe we can somehow avoid copying the full folder here?
 COPY program ./program
-COPY test ./test
 
 # Build the specific binary in release mode
 # Ensure network access if dependencies need downloading during build
