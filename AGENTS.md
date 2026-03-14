@@ -88,4 +88,4 @@ After updating all of the above, run `cargo update` to refresh `Cargo.lock` and 
 
 ## Environment
 
-See `.env.example`. Key vars: `SOURCE_CONSENSUS_RPC_URL`, `SOURCE_EXECUTION_RPC_URL`, `REDIS_URL`, `SP1_PROVER` (mock/network).
+See `.env.example`. Key vars: `CONSENSUS_RPCS_LIST`, `SOURCE_EXECUTION_RPC_URL`, `REDIS_URL`, `SP1_PROVER` (mock/network).
