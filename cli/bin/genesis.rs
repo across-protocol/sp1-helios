@@ -8,10 +8,7 @@ use helios_ethereum::rpc::http_rpc::HttpRpc;
 use serde::{Deserialize, Serialize};
 use sp1_helios_api::consensus_client::Client;
 use sp1_helios_api::{get_checkpoint, get_latest_checkpoint};
-use sp1_sdk::{
-    blocking::{MockProver, Prover},
-    Elf, HashableKey, ProvingKey,
-};
+use sp1_sdk::{Elf, HashableKey, Prover, ProverClient, ProvingKey};
 use std::default::Default;
 use std::{
     env, fs,
@@ -86,8 +83,8 @@ pub async fn main() -> Result<()> {
         );
     }
 
-    let client = MockProver::new();
-    let pk = client.setup(Elf::Static(HELIOS_ELF))?;
+    let client = ProverClient::builder().mock().build().await;
+    let pk = client.setup(Elf::Static(HELIOS_ELF)).await?;
 
     let checkpoint;
     if let Some(temp_slot) = args.slot {
