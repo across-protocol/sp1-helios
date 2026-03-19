@@ -8,7 +8,10 @@ use helios_ethereum::rpc::http_rpc::HttpRpc;
 use serde::{Deserialize, Serialize};
 use sp1_helios_api::consensus_client::Client;
 use sp1_helios_api::{get_checkpoint, get_latest_checkpoint};
-use sp1_sdk::{utils, HashableKey, Prover, ProverClient};
+use sp1_sdk::{
+    blocking::{MockProver, Prover},
+    Elf, HashableKey, ProvingKey,
+};
 use std::default::Default;
 use std::{
     env, fs,
@@ -70,8 +73,6 @@ pub struct GenesisConfig {
 
 #[tokio::main]
 pub async fn main() -> Result<()> {
-    utils::setup_logger();
-
     let args = GenesisArgs::parse();
 
     // This fetches the .env file from the project root. If the command is invoked in the contracts/ directory,
@@ -85,8 +86,8 @@ pub async fn main() -> Result<()> {
         );
     }
 
-    let client = ProverClient::builder().cpu().build();
-    let (_pk, vk) = client.setup(HELIOS_ELF);
+    let client = MockProver::new();
+    let pk = client.setup(Elf::Static(HELIOS_ELF))?;
 
     let checkpoint;
     if let Some(temp_slot) = args.slot {
@@ -185,7 +186,7 @@ pub async fn main() -> Result<()> {
                 .state_root()
         ),
         head,
-        helios_program_vkey: vk.bytes32(),
+        helios_program_vkey: pk.verifying_key().bytes32(),
         verifier: format!("0x{:x}", verifier),
         vkey_updater: format!("0x{:x}", vkey_updater),
         updaters,

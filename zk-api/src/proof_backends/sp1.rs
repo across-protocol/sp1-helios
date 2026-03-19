@@ -8,35 +8,39 @@ use anyhow::{anyhow, Context, Result};
 use async_trait::async_trait;
 use sp1_helios_primitives::types::ProofInputs;
 use sp1_sdk::{
-    EnvProver, HashableKey, ProverClient, SP1ProofWithPublicValues, SP1ProvingKey, SP1Stdin,
+    env::EnvProver, include_elf, Elf, HashableKey, ProveRequest, Prover, ProverClient, ProvingKey,
+    SP1ProofWithPublicValues, SP1Stdin,
 };
 use std::sync::Arc;
 use tracing::{debug, info};
 
 use super::ProofBackend;
 
-const ELF: &[u8] = include_bytes!("../../../elf/sp1-helios-elf");
+const ELF: Elf = include_elf!("sp1-helios-program");
 
 /// An implementation of `ProofBackend` using the SP1 prover.
 #[derive(Clone)]
 pub struct SP1Backend {
     prover_client: Arc<EnvProver>,
-    proving_key: Arc<SP1ProvingKey>,
+    proving_key: Arc<<EnvProver as Prover>::ProvingKey>,
 }
 
 impl SP1Backend {
     // todo: can improve env configurability here
-    pub fn from_env() -> Result<Self> {
+    pub async fn from_env() -> Result<Self> {
         info!(target: "sp1_backend::init", "Initializing SP1Backend...");
 
         // Initialize prover client from environment variables
-        let prover_client = Arc::new(ProverClient::from_env());
+        let prover_client = Arc::new(ProverClient::from_env().await);
         info!(target: "sp1_backend::init", "SP1 ProverClient created from environment.");
 
         // Setup proving and verification keys
         // Note: This can be computationally intensive
         info!(target: "sp1_backend::init", "Setting up SP1 proving and verification keys...");
-        let (pk, _vk) = prover_client.setup(ELF);
+        let pk = prover_client
+            .setup(ELF)
+            .await
+            .context("Failed to setup SP1 proving key")?;
         info!(target: "sp1_backend::init", "SP1 keys setup complete.");
 
         Ok(Self {
@@ -55,36 +59,17 @@ impl SP1Backend {
         Ok(stdin)
     }
 
-    /// Runs the SP1 prover in a blocking thread.
+    /// Runs the SP1 prover asynchronously.
     async fn run_sp1_prover(&self, stdin: SP1Stdin) -> Result<SP1ProofWithPublicValues> {
-        let prover_client = self.prover_client.clone();
-        let proving_key = self.proving_key.clone();
-
-        debug!(target: "sp1_backend::prove", "Spawning blocking task for SP1 proof generation.");
-        // Execute the potentially long-running prover logic in a blocking thread
-        let result = tokio::task::spawn_blocking(move || {
-            prover_client.prove(&proving_key, &stdin).groth16().run()
-        })
-        .await;
-
-        // todo: Is this meaningful error handling? I feel like we should only have 1 error arm. Flatten errors?
-        match result {
-            Ok(Ok(proof)) => {
-                debug!(target: "sp1_backend::prove", "Successfully generated SP1 proof.");
-                Ok(proof)
-            }
-            Ok(Err(prover_err)) => {
-                debug!(target: "sp1_backend::prove", "SP1 prover run failed: {:#?}", prover_err);
-                Err(prover_err.context("SP1 prover run failed"))
-            }
-            Err(join_err) => {
-                debug!(target: "sp1_backend::prove", "SP1 prover thread panicked or was cancelled: {:#?}", join_err);
-                Err(anyhow!(
-                    "SP1 prover thread panicked or was cancelled: {}",
-                    join_err
-                ))
-            }
-        }
+        debug!(target: "sp1_backend::prove", "Starting SP1 proof generation.");
+        let proof = self
+            .prover_client
+            .prove(&self.proving_key, stdin)
+            .groth16()
+            .await
+            .map_err(|e| anyhow!("SP1 prover run failed: {e}"))?;
+        debug!(target: "sp1_backend::prove", "Successfully generated SP1 proof.");
+        Ok(proof)
     }
 
     /// Formats the raw prover output into the target `SP1HeliosProofData`.
@@ -125,6 +110,6 @@ impl ProofBackend for SP1Backend {
     }
 
     fn vkey_digest(&self) -> Vec<u8> {
-        self.proving_key.vk.bytes32_raw().to_vec()
+        self.proving_key.verifying_key().bytes32_raw().to_vec()
     }
 }

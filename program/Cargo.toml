@@ -6,7 +6,7 @@ license.workspace = true
 authors.workspace = true
 
 [dependencies]
-sp1-zkvm = "5.2.1"
+sp1-zkvm = "6.0.2"
 hex = "0.4.3"
 
 # workspace dependencies

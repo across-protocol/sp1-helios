@@ -11,7 +11,7 @@ async fn main() -> anyhow::Result<()> {
     dotenv::dotenv().ok();
     init_tracing().context("failed to set up tracing")?;
 
-    let proof_backend = SP1Backend::from_env()?;
+    let proof_backend = SP1Backend::from_env().await?;
     let proof_service = ProofService::new(proof_backend).await?;
 
     let _api_task_handle = start_api_server(proof_service.clone()).await;

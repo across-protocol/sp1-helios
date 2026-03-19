@@ -21,7 +21,7 @@ Client → ZK-API (Axum + Redis) → SP1 Prover Network → Proof
 
 **Primitives** (`primitives/`) — Shared types: `ProofInputs`, `ProofOutputs`, `StorageSlot`, `ContractStorage`.
 
-**ELF** (`elf/sp1-helios-elf`) — Pre-built ZK program binary (~1.6MB). Rebuilt via `cargo prove build --docker --tag v5.2.1`.
+**ELF** (`elf/sp1-helios-elf`) — Pre-built ZK program binary (~1.6MB). Rebuilt via `cargo prove build --docker --tag v6.0.2`.
 
 **CLI** (`cli/`) — Binaries:
 - `genesis` — Generates initial state for contract deployment
@@ -31,7 +31,7 @@ Client → ZK-API (Axum + Redis) → SP1 Prover Network → Proof
 
 ```bash
 # Install SP1 toolchain (must match project version, NOT latest)
-sp1up --version 5.2.1
+sp1up --version 6.0.2
 
 # Build everything
 cargo build
@@ -57,7 +57,7 @@ cargo clippy --all-features --all-targets
 
 | Crate | Version | Purpose |
 |-------|---------|---------|
-| sp1-zkvm / sp1-sdk | 5.2.1 | ZK VM and proof generation |
+| sp1-zkvm / sp1-sdk | 6.0.2 | ZK VM and proof generation |
 | helios-consensus-core / helios-ethereum | 0.9.4 | Beacon chain consensus |
 | alloy | 1.0.37 | Ethereum types and RPC |
 | axum | 0.8.3 | HTTP server |
@@ -71,17 +71,17 @@ cargo clippy --all-features --all-targets
 
 ## SP1 Version Pinning
 
-The SP1 toolchain version is pinned in multiple places that **must be updated together**. Currently `5.2.1`.
+The SP1 toolchain version is pinned in multiple places that **must be updated together**. Currently `6.0.2`.
 
 | File | Line(s) | What to update |
 |------|---------|----------------|
-| `Cargo.toml` | `sp1-sdk = { version = "5.2.1", ... }` | Workspace dependency version |
-| `Cargo.toml` | `sp1-build = "5.2.1"` | Workspace dependency version |
-| `program/Cargo.toml` | `sp1-zkvm = "5.2.1"` | Direct dependency (not workspace — runs inside ZK VM) |
-| `zk-api/build.rs` | `tag: "v5.2.1".into()` | Docker image tag for reproducible ELF build |
-| `justfile` | `--tag v5.2.1` in `update-elf` recipe | Docker image tag for local ELF rebuild |
-| `.github/workflows/elf.yml` | `sp1up --version 5.2.1` | SP1 toolchain install in CI |
-| `.github/workflows/elf.yml` | `--tag v5.2.1` in `cargo-prove prove build` | Docker image tag in CI ELF build |
+| `Cargo.toml` | `sp1-sdk = { version = "6.0.2", ... }` | Workspace dependency version |
+| `Cargo.toml` | `sp1-build = "6.0.2"` | Workspace dependency version |
+| `program/Cargo.toml` | `sp1-zkvm = "6.0.2"` | Direct dependency (not workspace — runs inside ZK VM) |
+| `zk-api/build.rs` | `tag: "v6.0.2".into()` | Docker image tag for reproducible ELF build |
+| `justfile` | `--tag v6.0.2` in `update-elf` recipe | Docker image tag for local ELF rebuild |
+| `.github/workflows/elf.yml` | `sp1up --version 6.0.2` | SP1 toolchain install in CI |
+| `.github/workflows/elf.yml` | `--tag v6.0.2` in `cargo-prove prove build` | Docker image tag in CI ELF build |
 | `CLAUDE.md` / `AGENTS.md` | Multiple references | Documentation (build commands, dependency table) |
 
 After updating all of the above, run `cargo update` to refresh `Cargo.lock` and `just update-elf` to rebuild the ELF binary.
