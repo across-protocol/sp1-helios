@@ -37,7 +37,13 @@ jobs:
         env:
           CARGO_INCREMENTAL: 1
 
+      - name: Prepare ELF for clippy
+        run: |
+          mkdir -p target/elf-compilation/docker/riscv64im-succinct-zkvm-elf/release
+          cp elf/sp1-helios-elf target/elf-compilation/docker/riscv64im-succinct-zkvm-elf/release/sp1-helios-program
+
       - name: Run cargo clippy
         run: cargo clippy --all-features --all-targets -- -D warnings -A incomplete-features
         env:
           CARGO_INCREMENTAL: 1
+          SP1_SKIP_PROGRAM_BUILD: "true"
