@@ -8,7 +8,7 @@ use anyhow::{anyhow, Context, Result};
 use async_trait::async_trait;
 use sp1_helios_primitives::types::ProofInputs;
 use sp1_sdk::{
-    env::EnvProver, include_elf, Elf, HashableKey, ProveRequest, Prover, ProverClient, ProvingKey,
+    env::EnvProver, Elf, HashableKey, ProveRequest, Prover, ProverClient, ProvingKey,
     SP1ProofWithPublicValues, SP1Stdin,
 };
 use std::sync::Arc;
@@ -16,7 +16,7 @@ use tracing::{debug, info};
 
 use super::ProofBackend;
 
-const ELF: Elf = include_elf!("sp1-helios-program");
+const ELF: Elf = Elf::Static(include_bytes!("../../../elf/sp1-helios-elf"));
 
 /// An implementation of `ProofBackend` using the SP1 prover.
 #[derive(Clone)]

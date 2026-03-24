@@ -44,11 +44,6 @@ jobs:
         with:
           go-version: '1.24'
 
-      - name: Prepare ELF
-        run: |
-          mkdir -p target/elf-compilation/docker/riscv64im-succinct-zkvm-elf/release
-          cp elf/sp1-helios-elf target/elf-compilation/docker/riscv64im-succinct-zkvm-elf/release/sp1-helios-program
-
       - name: Build (release)
         working-directory: ${{ env.CRATE_PATH }}
         env:
@@ -141,12 +136,6 @@ jobs:
         uses: actions/setup-go@v5
         with:
           go-version: '1.24'
-
-      - name: Prepare ELF
-        run: |
-          ELF_DIR=${{ github.workspace }}/target/${{ runner.os }}-aarch64-apple-darwin-${{ github.run_id }}/elf-compilation/docker/riscv64im-succinct-zkvm-elf/release
-          mkdir -p "$ELF_DIR"
-          cp elf/sp1-helios-elf "$ELF_DIR/sp1-helios-program"
 
       - name: Build (release)
         working-directory: ${{ env.CRATE_PATH }}
