@@ -18,6 +18,9 @@ FROM rust:1.91.0-bookworm AS builder
 # Make BuildKit's platform vars visible for cache scoping
 ARG TARGETPLATFORM
 
+# Install build-time system dependencies required by SP1 native gnark FFI.
+RUN apt-get update && apt-get install -y --no-install-recommends golang-go && rm -rf /var/lib/apt/lists/*
+
 # Install required toolchain components
 # This is done early to leverage Docker layer caching
 RUN rustup component add llvm-tools rustc-dev
