@@ -13,7 +13,7 @@
 #    docker buildx build --platform linux/amd64,linux/arm64 --push -f zk-api/Dockerfile -t your-registry/sp1-helios/zk-api:latest .
 
 # Stage 1: Builder
-FROM rust:1.89.0-bookworm AS builder
+FROM rust:1.91.0-bookworm AS builder
 
 # Make BuildKit's platform vars visible for cache scoping
 ARG TARGETPLATFORM
