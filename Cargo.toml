@@ -19,8 +19,8 @@ dotenv = "0.15.0"
 
 # sp1 dependencies. Keep the same version.
 # ! When updating, see "SP1 Version Pinning" in AGENTS.md for the full list of places to change.
-sp1-sdk = { version = "6.0.2", default-features = false, features = ["network", "blocking", "native-gnark"] }
-sp1-build = "6.0.2"
+sp1-sdk = { version = "6.1.0", default-features = false, features = ["network", "blocking", "native-gnark"] }
+sp1-build = "6.1.0"
 
 tokio = "1.44.2"
 serde = "1.0.203"
