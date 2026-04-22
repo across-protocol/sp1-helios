@@ -35,7 +35,7 @@ OPTIONS:
 {all-args}
 
 EXAMPLES:
-  genesis --slot 12345 --env-file .env.local --out ./contracts
+  genesis --slot 12345 --env-file .env.local --out .
 "
 )]
 pub struct GenesisArgs {
@@ -45,7 +45,7 @@ pub struct GenesisArgs {
     pub env_file: String,
     #[arg(
         long,
-        default_value = "contracts",
+        default_value = ".",
         help = "The output directory for the genesis.json file"
     )]
     pub out: String,
