@@ -22,6 +22,9 @@ jobs:
       - name: Checkout sources
         uses: actions/checkout@v4
 
+      - name: Install protoc
+        run: sudo apt-get install -y protobuf-compiler
+
       - name: Install Rust
         uses: actions-rs/toolchain@v1
         with:
@@ -38,3 +41,4 @@ jobs:
         run: cargo clippy --all-features --all-targets -- -D warnings -A incomplete-features
         env:
           CARGO_INCREMENTAL: 1
+          SP1_SKIP_PROGRAM_BUILD: "true"

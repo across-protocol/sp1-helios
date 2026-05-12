@@ -21,6 +21,7 @@ cargo run --bin sp1-helios-api
 
 # Generate genesis state
 cargo run --bin genesis -- --slot <SLOT>
+# Writes ./genesis.json by default
 
 # Print vkey
 cargo run --bin vkey

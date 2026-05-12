@@ -12,11 +12,21 @@
 # 3. (If Tests Pass) Build & Push Multi-Arch for Deployment:
 #    docker buildx build --platform linux/amd64,linux/arm64 --push -f zk-api/Dockerfile -t your-registry/sp1-helios/zk-api:latest .
 
-# Stage 1: Builder
-FROM rust:1.89.0-bookworm AS builder
+# Stage 1: Go toolchain
+FROM golang:1.24-bookworm AS go-toolchain
+
+# Stage 2: Builder
+FROM rust:1.91.0-bookworm AS builder
 
 # Make BuildKit's platform vars visible for cache scoping
 ARG TARGETPLATFORM
+
+# Provide a modern Go toolchain required by SP1 native gnark FFI.
+COPY --from=go-toolchain /usr/local/go /usr/local/go
+ENV PATH="/usr/local/go/bin:${PATH}"
+
+# Install build-time system dependencies required by protobuf codegen and bindgen.
+RUN apt-get update && apt-get install -y --no-install-recommends protobuf-compiler libprotobuf-dev clang libclang-dev && rm -rf /var/lib/apt/lists/*
 
 # Install required toolchain components
 # This is done early to leverage Docker layer caching

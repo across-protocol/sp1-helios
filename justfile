@@ -6,4 +6,4 @@ clean:
 # compared to `zk-api/build.rs`, we should pin the exact verion of the docker image by using `--tag`
 # We default to using a version of `sp1-build` from Cargo.toml
 update-elf:
-    cd program && cargo prove build --elf-name sp1-helios-elf --docker --tag v5.2.1 --output-directory ../elf
+    cd program && cargo prove build --elf-name sp1-helios-elf --docker --tag v6.1.0 --output-directory ../elf
