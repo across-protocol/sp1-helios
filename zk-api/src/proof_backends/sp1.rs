@@ -8,8 +8,9 @@ use anyhow::{anyhow, Context, Result};
 use async_trait::async_trait;
 use sp1_helios_primitives::types::ProofInputs;
 use sp1_sdk::{
-    env::EnvProver, Elf, HashableKey, ProveRequest, Prover, ProverClient, ProvingKey,
-    SP1ProofWithPublicValues, SP1Stdin,
+    env::{EnvProver, EnvProvingKey},
+    Elf, HashableKey, ProveRequest, Prover, ProverClient, ProvingKey, SP1ProofWithPublicValues,
+    SP1Stdin,
 };
 use std::sync::Arc;
 use tracing::{debug, info};
@@ -17,6 +18,7 @@ use tracing::{debug, info};
 use super::ProofBackend;
 
 const ELF: Elf = Elf::Static(include_bytes!("../../../elf/sp1-helios-elf"));
+const NETWORK_GAS_LIMIT_MULTIPLIER_BPS: u64 = 12_500;
 
 /// An implementation of `ProofBackend` using the SP1 prover.
 #[derive(Clone)]
@@ -62,12 +64,44 @@ impl SP1Backend {
     /// Runs the SP1 prover asynchronously.
     async fn run_sp1_prover(&self, stdin: SP1Stdin) -> Result<SP1ProofWithPublicValues> {
         debug!(target: "sp1_backend::prove", "Starting SP1 proof generation.");
-        let proof = self
-            .prover_client
-            .prove(&self.proving_key, stdin)
-            .groth16()
-            .await
-            .map_err(|e| anyhow!("SP1 prover run failed: {e}"))?;
+
+        let proof = match (&*self.prover_client, &*self.proving_key) {
+            (EnvProver::Network(prover), EnvProvingKey::Network { pk, .. }) => {
+                let (_, report) = prover
+                    .execute(pk.elf().clone(), stdin.clone())
+                    .calculate_gas(true)
+                    .await
+                    .map_err(|e| anyhow!("SP1 gas estimation failed before network submit: {e}"))?;
+
+                let estimated_gas = report.gas().ok_or_else(|| {
+                    anyhow!("SP1 execution report did not include gas usage during estimation")
+                })?;
+                let adjusted_gas = estimated_gas
+                    .saturating_mul(NETWORK_GAS_LIMIT_MULTIPLIER_BPS)
+                    .div_ceil(10_000);
+
+                info!(
+                    target: "sp1_backend::prove",
+                    estimated_gas,
+                    adjusted_gas,
+                    "Submitting network proof with temporary gas-limit mitigation"
+                );
+
+                prover
+                    .prove(pk, stdin)
+                    .gas_limit(adjusted_gas)
+                    .groth16()
+                    .await
+                    .map_err(|e| anyhow!("SP1 prover run failed: {e}"))?
+            }
+            _ => self
+                .prover_client
+                .prove(&self.proving_key, stdin)
+                .groth16()
+                .await
+                .map_err(|e| anyhow!("SP1 prover run failed: {e}"))?,
+        };
+
         debug!(target: "sp1_backend::prove", "Successfully generated SP1 proof.");
         Ok(proof)
     }
