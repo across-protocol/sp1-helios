@@ -32,6 +32,10 @@ pub fn main() {
         contract_storage_slots,
     } = serde_cbor::from_slice(&encoded_inputs).unwrap();
 
+    // Don't allow `next_sync_committee`, a free input, to be propagated to ProofOutputs. It will only
+    // be set if there's a valid sync committee update
+    store.next_sync_committee = None;
+
     let start_sync_committee_hash = store.current_sync_committee.tree_hash_root();
     let prev_header: B256 = store.finalized_header.beacon().tree_hash_root();
     let prev_head = store.finalized_header.beacon().slot;
