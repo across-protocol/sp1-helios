@@ -8,10 +8,7 @@ use std::{
 
 use anyhow::anyhow;
 
-use alloy::{
-    eips::BlockId,
-    hex::{self},
-};
+use alloy::hex::{self};
 use alloy_primitives::B256;
 use anyhow::Result;
 use chrono::Duration;
@@ -51,7 +48,6 @@ pub struct ConsensusProofInputs<S: ConsensusSpec> {
     pub forks: helios_consensus_core::types::Forks,
     pub sync_committee_updates: Vec<Update<S>>,
     pub finality_update: FinalityUpdate<S>,
-    pub execution_block_id: BlockId,
     pub config: Arc<Config>,
 }
 
@@ -81,17 +77,6 @@ pub async fn get_proof_inputs<S: ConsensusSpec>(
         ));
     }
 
-    let execution_block_number = *client
-        .store
-        .finalized_header
-        .execution()
-        .map_err(|_| {
-            anyhow!(
-            "current epoch does not belong to a hard fork that enables header execution payload"
-        )
-        })?
-        .block_number();
-
     debug!(target: "consensus_client::proof_inputs", "successfully generated proof inputs. Finalized slot {}", trace.final_store.finalized_header.beacon().slot);
 
     Ok(ConsensusProofInputs {
@@ -101,9 +86,6 @@ pub async fn get_proof_inputs<S: ConsensusSpec>(
         forks: client.config.forks.clone(),
         sync_committee_updates: trace.sync_committee_updates,
         finality_update: trace.finality_update,
-        execution_block_id: BlockId::Number(alloy::eips::BlockNumberOrTag::Number(
-            execution_block_number,
-        )),
         config: client.config.clone(),
     })
 }
@@ -155,13 +137,11 @@ impl<S: ConsensusSpec, R: ConsensusRpc<S> + std::fmt::Debug> Client<S, R> {
         .map_err(|_| anyhow::anyhow!("Failed to get network from chain_id: {}", chain_id))?;
         let base_config = network.to_base_config();
 
-        let config = Config {
-            chain: base_config.chain,
-            forks: base_config.forks,
-            strict_checkpoint_age: false,
-            max_checkpoint_age: 604800, // 1 week
-            ..Default::default()
-        };
+        // `Config` no longer implements `Default` (its RPC endpoints are typed `Url`s), so
+        // start from the network's base config and override what we need.
+        let mut config = Config::from(base_config);
+        config.strict_checkpoint_age = false;
+        config.max_checkpoint_age = 604800; // 1 week
 
         // In a simple case, paths_str is a coma-separated list of URLs. But that depends on which
         // R we're using. Some R's expect these "urls" to have different meaning, e.g. it can be
@@ -221,40 +201,6 @@ impl<S: ConsensusSpec, R: ConsensusRpc<S> + std::fmt::Debug> Client<S, R> {
     /// Convenience method that delegates to ConfigExt.
     pub fn expected_current_slot(&self) -> u64 {
         self.config.expected_current_slot()
-    }
-
-    /// Fetch a beacon block by slot.
-    /// Tries primary RPC first, then falls back to backups in parallel.
-    pub async fn get_block(
-        &self,
-        slot: u64,
-    ) -> Result<helios_consensus_core::types::BeaconBlock<S>> {
-        // 1) Try the primary RPC first
-        match self.rpcs.first().unwrap().get_block(slot).await {
-            Ok(block) => return Ok(block),
-            Err(e) => {
-                warn!(
-                    target: "consensus_client::get_block",
-                    "Primary RPC failed; falling back to backups for slot {}: {}", slot, e
-                );
-            }
-        }
-
-        // 2) Build timeout-wrapped futures for all the backups
-        let tasks: Vec<_> = self
-            .rpcs
-            .iter()
-            .skip(1)
-            .map(|rpc| timeout(std::time::Duration::from_secs(5), rpc.get_block(slot)))
-            .collect();
-
-        // 3) Run them all, drop any that timed out or errored, take the first valid one
-        join_all(tasks)
-            .await
-            .into_iter()
-            .filter_map(|res| res.ok().and_then(Result::ok))
-            .next()
-            .ok_or_else(|| anyhow!("All RPCs failed to fetch block for slot {}", slot))
     }
 
     // bootstrap is a heavy call, use a 12-sec timeout for it

@@ -4,10 +4,8 @@ use alloy_rlp::Encodable;
 use alloy_trie::{proof, Nibbles};
 use anyhow::anyhow;
 
-use helios_consensus_core::consensus_spec::MainnetConsensusSpec;
 use helios_ethereum::config::{checkpoints, networks::Network};
 use sp1_helios_primitives::types::{ContractStorage, VerifiedStorageSlot};
-use tree_hash::TreeHash;
 
 pub mod api;
 pub mod consensus_client;
@@ -57,14 +55,46 @@ pub async fn get_checkpoint(slot: u64) -> B256 {
 
 /// Fetch checkpoint from a slot number. This function only works for slots that are the 1st slot in their epoch
 pub async fn try_get_checkpoint(slot: u64) -> anyhow::Result<B256> {
-    use consensus_client::Client;
-    use helios_ethereum::rpc::http_rpc::HttpRpc;
+    // The beacon block root at `slot` *is* the checkpoint. Query the standard beacon API
+    // directly: the helios `ConsensusRpc` trait no longer exposes block fetching.
+    #[derive(serde::Deserialize)]
+    struct HeaderResponse {
+        data: HeaderData,
+    }
+    #[derive(serde::Deserialize)]
+    struct HeaderData {
+        root: B256,
+    }
 
-    // Create a Client just to fetch the block (no bootstrap/sync needed)
-    let client = Client::<MainnetConsensusSpec, HttpRpc>::from_env()?;
-    let block = client.get_block(slot).await?;
+    let rpcs =
+        std::env::var("CONSENSUS_RPCS_LIST").map_err(|_| anyhow!("CONSENSUS_RPCS_LIST not set"))?;
+    let client = reqwest::Client::new();
 
-    Ok(B256::from_slice(block.tree_hash_root().as_ref()))
+    let mut last_err = anyhow!("no consensus RPCs configured in CONSENSUS_RPCS_LIST");
+    for rpc in rpcs.split(',').map(str::trim).filter(|s| !s.is_empty()) {
+        let url = format!(
+            "{}/eth/v1/beacon/headers/{}",
+            rpc.trim_end_matches('/'),
+            slot
+        );
+        match client.get(&url).send().await {
+            Ok(response) if response.status().is_success() => {
+                match response.json::<HeaderResponse>().await {
+                    Ok(header) => return Ok(header.data.root),
+                    Err(e) => last_err = anyhow!("failed to parse header response from {rpc}: {e}"),
+                }
+            }
+            Ok(response) => {
+                last_err = anyhow!(
+                    "{rpc} returned status {} for slot {slot}",
+                    response.status()
+                )
+            }
+            Err(e) => last_err = anyhow!("request to {rpc} failed: {e}"),
+        }
+    }
+
+    Err(last_err)
 }
 
 /**
