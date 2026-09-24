@@ -9,6 +9,7 @@ use crate::{
     },
     util::CancellationTokenGuard,
 };
+use alloy::eips::BlockId;
 use alloy::transports::BoxFuture;
 use alloy_primitives::B256;
 use anyhow::{anyhow, Context, Result};
@@ -18,6 +19,7 @@ use helios_consensus_core::{
 };
 use helios_ethereum::rpc::{http_rpc::HttpRpc, ConsensusRpc};
 use serde::{de::DeserializeOwned, Serialize};
+use sp1_helios_primitives::execution::execution_anchor_hash;
 use sp1_helios_primitives::types::ProofInputs;
 use tree_hash::TreeHash;
 
@@ -119,12 +121,9 @@ where
                         )
                     })?;
 
-            let finalized_block_number = *finalized_header
-                .execution()
-                .map_err(|_| {
-                    ProofServiceError::Internal("Failed to get execution header.".to_string())
-                })?
-                .block_number();
+            let finalized_block_number = self
+                .finalized_execution_block_number(&finalized_header)
+                .await?;
 
             match proof_request_state {
                 Some(state) => match state.status {
@@ -268,14 +267,9 @@ where
                 .find_requests_by_status(ProofRequestStatus::WaitingForFinality)
                 .await?;
 
-            let finalized_block_number = match latest_finalized_header.execution() {
-                Ok(execution_header) => *execution_header.block_number(),
-                Err(_) => {
-                    return Err(ProofServiceError::Internal(
-                        "Failed to get execution header from finality update".to_string(),
-                    ));
-                }
-            };
+            let finalized_block_number = self
+                .finalized_execution_block_number(&latest_finalized_header)
+                .await?;
             let finalized_slot = latest_finalized_header.beacon().slot;
 
             let mut updated_states = Vec::new();
@@ -343,6 +337,39 @@ where
         }
 
         Ok(())
+    }
+
+    /// Resolves the execution block number a finalized light-client header anchors to.
+    ///
+    /// Pre-Gloas headers embed the full execution payload header, so the number is read
+    /// directly. Gloas (EIP-7732) headers only commit to an execution block hash, which is
+    /// resolved via the execution RPC proxy (the returned header is verified to be the
+    /// keccak256 preimage of that hash, so a lying RPC cannot skew finality gating).
+    async fn finalized_execution_block_number(
+        &self,
+        header: &LightClientHeader,
+    ) -> Result<u64, ProofServiceError> {
+        if let Ok(execution) = header.execution() {
+            return Ok(*execution.block_number());
+        }
+
+        let anchor_hash = execution_anchor_hash(header).map_err(|e| {
+            ProofServiceError::Internal(format!(
+                "Failed to extract execution anchor hash from finalized header: {e}"
+            ))
+        })?;
+
+        let execution_header = self
+            .execution_rpc_proxy
+            .get_execution_header(anchor_hash)
+            .await
+            .map_err(|e| {
+                ProofServiceError::Internal(format!(
+                    "Failed to resolve execution block {anchor_hash} for finalized header: {e:#}"
+                ))
+            })?;
+
+        Ok(execution_header.fields.block_number)
     }
 
     /*
@@ -443,12 +470,19 @@ where
         let latest_finalized_header = consensus_proof_inputs.finality_update.finalized_header();
         let expected_current_slot = consensus_proof_inputs.expected_current_slot;
 
-        // Fetch execution layer storage proof
-        let latest_finalized_execution_header = latest_finalized_header
-            .execution()
-            .map_err(|_| anyhow!("No execution header in finality update".to_string()))?;
+        // Resolve the execution block this finalized header anchors to (pre-Gloas: the slot's
+        // own payload; Gloas: the builder bid's parent payload) and fetch its hash-verified
+        // RLP header. The ZK program re-verifies the same preimage, so this is the exact
+        // header the proof will be about.
+        let anchor_hash = execution_anchor_hash(&latest_finalized_header)
+            .map_err(|e| anyhow!("Failed to extract execution anchor hash: {e}"))?;
+        let execution_header = self
+            .execution_rpc_proxy
+            .get_execution_header(anchor_hash)
+            .await
+            .context("Failed to get execution block header using execution provider proxy")?;
 
-        let block_id = (*latest_finalized_execution_header.block_number()).into();
+        let block_id: BlockId = anchor_hash.into();
         debug!(target: "proof_service::input", "Fetching storage proof for address {} slot {:?} at block ID {:?}", request.src_chain_contract_address, request.src_chain_storage_slots, block_id);
 
         // Get execution part of ProofInputs
@@ -458,7 +492,7 @@ where
                 request.src_chain_contract_address,
                 &request.src_chain_storage_slots,
                 block_id,
-                *latest_finalized_execution_header.state_root(),
+                execution_header.fields.state_root,
             )
             .await
             .context("Failed to get storage proof using execution provider proxy")?;
@@ -474,6 +508,7 @@ where
             genesis_root: consensus_proof_inputs.config.chain.genesis_root,
             forks: consensus_proof_inputs.config.forks.clone(),
             contract_storage_slots: contract_storage,
+            execution_block_header_rlp: execution_header.rlp,
         };
 
         Ok(inputs)
