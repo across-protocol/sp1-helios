@@ -79,7 +79,7 @@ Infra lives in zion (`projects/images/across/terraform/cloud_build_zk_api.tf`, `
 | Release tag `vX.Y.Z` | No build. The same image is tagged `:vX.Y.Z` and **prod** is deployed by `:vX.Y.Z` |
 
 - Release a merged commit with `gh release create vX.Y.Z --target main --generate-notes`. If the release changes `elf/`, update the on-chain vkey on every `SP1Helios` first.
-- Prod is only ever deployed by a release tag; the promote fails for a commit that never went through `main`.
+- Prod is only ever deployed by a release tag. A tag ruleset (repo settings) refuses a stable tag unless the `build-across-zk-api (images-across-6363)` check is green on the commit, i.e. the `main` build and staging deploy succeeded. Pre-release tags are exempt.
 - Pre-release tags (`vX.Y.Z-alpha.N`) only build the `genesis` binaries (`release-binaries.yml`) that `across-protocol/contracts` downloads; they never touch prod. Stable tags do both, so one version names the contract vkey and the prod API (both embed `elf/sp1-helios-elf`).
 - Rollback: re-run the promote trigger with the previous release's `--tag` (see the zion how-to).
 
