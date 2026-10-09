@@ -67,7 +67,21 @@ cargo clippy --all-features --all-targets
 
 - **pr.yaml** — `cargo fmt` + `cargo clippy`
 - **elf.yml** — Rebuild ELF in Docker, verify no diff (reproducibility check)
-- **release-binaries.yml** — Cross-platform binary releases on tag push
+- **release-binaries.yml** — Cross-platform `genesis` binary releases on any `v*` tag push
+
+## Deploy & Release
+
+Infra lives in zion (`projects/images/across/terraform/cloud_build_zk_api.tf`, `docs/comp-doc/howto-across-zk-api.md`). One trunk, one image per merge:
+
+| Event | Effect |
+|-------|--------|
+| PR merged to `main` | Cloud Build builds the `zk-api` image once (~16 min), pushes it as `:<sha>`, deploys **staging** by `:<sha>` |
+| Release tag `vX.Y.Z` | No build. The same image is tagged `:vX.Y.Z` and **prod** is deployed by `:vX.Y.Z` |
+
+- Release a merged commit with `gh release create vX.Y.Z --target main --generate-notes`. If the release changes `elf/`, update the on-chain vkey on every `SP1Helios` first.
+- Prod is only ever deployed by a release tag. A tag ruleset (repo settings) refuses a stable tag unless the `build-across-zk-api (images-across-6363)` check is green on the commit, i.e. the `main` build and staging deploy succeeded. Pre-release tags are exempt.
+- Pre-release tags (`vX.Y.Z-alpha.N`) only build the `genesis` binaries (`release-binaries.yml`) that `across-protocol/contracts` downloads; they never touch prod. Stable tags do both, so one version names the contract vkey and the prod API (both embed `elf/sp1-helios-elf`).
+- Rollback: re-run the promote trigger with the previous release's `--tag` (see the zion how-to).
 
 ## SP1 Version Pinning
 
