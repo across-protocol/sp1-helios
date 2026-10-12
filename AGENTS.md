@@ -21,7 +21,7 @@ Client → ZK-API (Axum + Redis) → SP1 Prover Network → Proof
 
 **Primitives** (`primitives/`) — Shared types: `ProofInputs`, `ProofOutputs`, `StorageSlot`, `ContractStorage`.
 
-**ELF** (`elf/sp1-helios-elf`) — Pre-built ZK program binary (~1.6MB). Rebuilt via `cargo prove build --docker --tag v6.1.0`.
+**ELF** (`elf/sp1-helios-elf`) — Pre-built ZK program binary (~1.6MB). Rebuilt via `cargo prove build --docker --tag v6.8.1`.
 
 **CLI** (`cli/`) — Binaries:
 - `genesis` — Generates initial state for contract deployment
@@ -31,7 +31,7 @@ Client → ZK-API (Axum + Redis) → SP1 Prover Network → Proof
 
 ```bash
 # Install SP1 toolchain (must match project version, NOT latest)
-sp1up --version 6.1.0
+sp1up --version 6.8.1
 
 # Build everything
 cargo build
@@ -57,7 +57,7 @@ cargo clippy --all-features --all-targets
 
 | Crate | Version | Purpose |
 |-------|---------|---------|
-| sp1-zkvm / sp1-sdk | 6.1.0 | ZK VM and proof generation |
+| sp1-zkvm / sp1-sdk | 6.8.1 | ZK VM and proof generation |
 | helios-consensus-core / helios-ethereum | git `844d0132` (glamsterdam branch) | Beacon chain consensus incl. Gloas/ePBS (pinned until a Gloas-capable release is tagged; see a16z/helios#805) |
 | alloy | 2.1.0 | Ethereum types and RPC |
 | axum | 0.8.3 | HTTP server |
@@ -67,21 +67,35 @@ cargo clippy --all-features --all-targets
 
 - **pr.yaml** — `cargo fmt` + `cargo clippy`
 - **elf.yml** — Rebuild ELF in Docker, verify no diff (reproducibility check)
-- **release-binaries.yml** — Cross-platform binary releases on tag push
+- **release-binaries.yml** — Cross-platform `genesis` binary releases on any `v*` tag push
+
+## Deploy & Release
+
+Infra lives in zion (`projects/images/across/terraform/cloud_build_zk_api.tf`, `docs/comp-doc/howto-across-zk-api.md`). One trunk, one image per merge:
+
+| Event | Effect |
+|-------|--------|
+| PR merged to `main` | Cloud Build builds the `zk-api` image once (~16 min), pushes it as `:<sha>`, deploys **staging** by `:<sha>` |
+| Release tag `vX.Y.Z` | No build. The same image is tagged `:vX.Y.Z` and **prod** is deployed by `:vX.Y.Z` |
+
+- Release a merged commit with `gh release create vX.Y.Z --target main --generate-notes`. If the release changes `elf/`, update the on-chain vkey on every `SP1Helios` first.
+- Prod is only ever deployed by a release tag. A tag ruleset (repo settings) refuses a stable tag unless the `build-across-zk-api (images-across-6363)` check is green on the commit, i.e. the `main` build and staging deploy succeeded. Pre-release tags are exempt.
+- Pre-release tags (`vX.Y.Z-alpha.N`) only build the `genesis` binaries (`release-binaries.yml`) that `across-protocol/contracts` downloads; they never touch prod. Stable tags do both, so one version names the contract vkey and the prod API (both embed `elf/sp1-helios-elf`).
+- Rollback: re-run the promote trigger with the previous release's `--tag` (see the zion how-to).
 
 ## SP1 Version Pinning
 
-The SP1 toolchain version is pinned in multiple places that **must be updated together**. Currently `6.1.0`.
+The SP1 toolchain version is pinned in multiple places that **must be updated together**. Currently `6.8.1`.
 
 | File | Line(s) | What to update |
 |------|---------|----------------|
-| `Cargo.toml` | `sp1-sdk = { version = "6.1.0", ... }` | Workspace dependency version |
-| `Cargo.toml` | `sp1-build = "6.1.0"` | Workspace dependency version |
-| `program/Cargo.toml` | `sp1-zkvm = "6.1.0"` | Direct dependency (not workspace — runs inside ZK VM) |
-| `zk-api/build.rs` | `tag: "v6.1.0".into()` | Docker image tag for reproducible ELF build |
-| `justfile` | `--tag v6.1.0` in `update-elf` recipe | Docker image tag for local ELF rebuild |
-| `.github/workflows/elf.yml` | `sp1up --version 6.1.0` | SP1 toolchain install in CI |
-| `.github/workflows/elf.yml` | `--tag v6.1.0` in `cargo-prove prove build` | Docker image tag in CI ELF build |
+| `Cargo.toml` | `sp1-sdk = { version = "6.8.1", ... }` | Workspace dependency version |
+| `Cargo.toml` | `sp1-build = "6.8.1"` | Workspace dependency version |
+| `program/Cargo.toml` | `sp1-zkvm = "6.8.1"` | Direct dependency (not workspace — runs inside ZK VM) |
+| `zk-api/build.rs` | `tag: "v6.8.1".into()` | Docker image tag for reproducible ELF build |
+| `justfile` | `--tag v6.8.1` in `update-elf` recipe | Docker image tag for local ELF rebuild |
+| `.github/workflows/elf.yml` | `sp1up --version 6.8.1` | SP1 toolchain install in CI |
+| `.github/workflows/elf.yml` | `--tag v6.8.1` in `cargo-prove prove build` | Docker image tag in CI ELF build |
 | `CLAUDE.md` / `AGENTS.md` | Multiple references | Documentation (build commands, dependency table) |
 
 After updating all of the above, run `cargo update` to refresh `Cargo.lock` and `just update-elf` to rebuild the ELF binary.
