@@ -19,7 +19,7 @@ Client → ZK-API (Axum + Redis) → SP1 Prover Network → Proof
 - `redis_store.rs` — Proof state persistence
 - `consensus_client/mod.rs` — Beacon chain client (wraps Helios)
 
-**Primitives** (`primitives/`) — Shared types: `ProofInputs`, `ProofOutputs`, `StorageSlot`, `ContractStorage`.
+**Primitives** (`primitives/`) — Shared types (`ProofInputs`, `ProofOutputs`, `StorageSlot`, `ContractStorage`) plus the verification logic both guest and host run: `verify_storage_slot_proofs` (MPT account + slot proofs) and `execution::verified_execution_fields` (Gloas execution-header witness).
 
 **ELF** (`elf/sp1-helios-elf`) — Pre-built ZK program binary (~1.6MB). Rebuilt via `cargo prove build --docker --tag v6.8.1`.
 

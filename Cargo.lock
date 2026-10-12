@@ -8669,6 +8669,7 @@ version = "0.1.0"
 dependencies = [
  "alloy-consensus 2.1.0",
  "alloy-primitives",
+ "alloy-rlp",
  "alloy-sol-types",
  "alloy-trie",
  "anyhow",
@@ -8681,11 +8682,8 @@ name = "sp1-helios-program"
 version = "0.1.0"
 dependencies = [
  "alloy-primitives",
- "alloy-rlp",
  "alloy-sol-types",
- "alloy-trie",
  "helios-consensus-core",
- "hex",
  "serde_cbor",
  "sp1-helios-primitives",
  "sp1-zkvm",
