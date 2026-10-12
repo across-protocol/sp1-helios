@@ -1,15 +1,17 @@
 use alloy::{
+    consensus::Header,
     eips::BlockId,
     network::Ethereum,
     providers::{Provider as _, ProviderBuilder, RootProvider},
     rpc::types::EIP1186AccountProofResponse,
 };
-use alloy_primitives::{keccak256, Address, Bytes, B256};
+use alloy_primitives::{Address, B256};
 use anyhow::anyhow;
 use anyhow::{Context, Result};
 use futures::future::FutureExt;
+use helios_consensus_core::types::LightClientHeader;
 use reqwest::Url;
-use sp1_helios_primitives::execution::{decode_execution_header_fields, ExecutionHeaderFields};
+use sp1_helios_primitives::execution::{verified_execution_fields, ExecutionFields};
 use std::{env, time::Duration};
 use tokio::time::timeout;
 use tracing::warn;
@@ -17,16 +19,6 @@ use tracing::warn;
 use crate::{types::ContractStorageBuilder, verify_storage_slot_proofs};
 
 use super::multiplex;
-
-/// An execution block header fetched by hash, re-encoded to RLP and verified to be the
-/// keccak256 preimage of the requested hash.
-#[derive(Debug, Clone)]
-pub struct VerifiedExecutionHeader {
-    /// RLP encoding of the header; `keccak256(rlp) == block hash` is guaranteed.
-    pub rlp: Bytes,
-    /// `state_root` and `block_number` decoded from the RLP.
-    pub fields: ExecutionHeaderFields,
-}
 
 #[derive(Clone)]
 pub struct Proxy {
@@ -104,14 +96,35 @@ impl Proxy {
         Ok(proof)
     }
 
-    /// Fetches the execution block header for `block_hash`, re-encodes it to RLP and verifies
-    /// the encoding is the keccak256 preimage of `block_hash` before returning it. Multiplexes
-    /// across the available RPC providers.
+    /// Resolves the execution block a finalized light-client header anchors to.
     ///
-    /// The preimage check both rejects lying RPCs and fails loudly if the local alloy version
+    /// Pre-Gloas headers embed the execution payload header, so no witness is needed. Gloas
+    /// (EIP-7732) headers only commit to an execution block hash, so the full header is fetched
+    /// from the execution RPC and verified to hash to that commitment. The returned witness is
+    /// what goes into `ProofInputs::execution_header`; the ZK program re-runs the same check.
+    pub async fn resolve_execution_fields(
+        &self,
+        finalized_header: &LightClientHeader,
+    ) -> Result<(Option<Header>, ExecutionFields)> {
+        let witness = match finalized_header {
+            LightClientHeader::Gloas(header) => Some(
+                self.get_execution_header(header.execution_block_hash)
+                    .await
+                    .context("Failed to fetch Gloas execution header witness")?,
+            ),
+            _ => None,
+        };
+        let fields = verified_execution_fields(finalized_header, witness.as_ref())?;
+        Ok((witness, fields))
+    }
+
+    /// Fetches the execution block header for `block_hash` and verifies it hashes to
+    /// `block_hash` before returning it. Multiplexes across the available RPC providers.
+    ///
+    /// The hash check both rejects lying RPCs and fails loudly if the local alloy version
     /// cannot round-trip a new fork's header layout (e.g. a header field added by a hard fork
     /// that this build's alloy does not know yet).
-    pub async fn get_execution_header(&self, block_hash: B256) -> Result<VerifiedExecutionHeader> {
+    pub async fn get_execution_header(&self, block_hash: B256) -> Result<Header> {
         multiplex(
             |client| {
                 (async move { Self::get_execution_header_and_check(client, block_hash).await })
@@ -125,29 +138,22 @@ impl Proxy {
     async fn get_execution_header_and_check(
         client: RootProvider<Ethereum>,
         block_hash: B256,
-    ) -> Result<VerifiedExecutionHeader> {
+    ) -> Result<Header> {
         let block = timeout(Duration::from_secs(4), client.get_block_by_hash(block_hash))
             .await
             .map_err(|e| anyhow!("get_block_by_hash timed out after {:#?}", e))?
             .map_err(|e| anyhow!("rpc error: {:#?}", e))?
             .ok_or_else(|| anyhow!("block {} not found", block_hash))?;
 
-        let rlp = alloy_rlp::encode(&block.header.inner);
-        if keccak256(&rlp) != block_hash {
+        let header = block.header.inner;
+        let hash = header.hash_slow();
+        if hash != block_hash {
             return Err(anyhow!(
-                "re-encoded execution header does not hash to {} — lying RPC, or this alloy \
-                version cannot round-trip the current fork's header layout",
-                block_hash
+                "execution header from RPC hashes to {hash}, expected {block_hash} — lying RPC, \
+                or this alloy version cannot round-trip the current fork's header layout"
             ));
         }
-
-        let fields = decode_execution_header_fields(&rlp)
-            .map_err(|e| anyhow!("failed to decode execution header fields: {e}"))?;
-
-        Ok(VerifiedExecutionHeader {
-            rlp: rlp.into(),
-            fields,
-        })
+        Ok(header)
     }
 
     /// Requests Merkle proof from execution client. Times out if it rpc call takes longer than 4 seconds

@@ -58,8 +58,8 @@ cargo clippy --all-features --all-targets
 | Crate | Version | Purpose |
 |-------|---------|---------|
 | sp1-zkvm / sp1-sdk | 6.8.1 | ZK VM and proof generation |
-| helios-consensus-core / helios-ethereum | git `844d0132` (glamsterdam branch) | Beacon chain consensus incl. Gloas/ePBS (pinned until a Gloas-capable release is tagged; see a16z/helios#805) |
-| alloy | 2.1.0 | Ethereum types and RPC |
+| helios-consensus-core / helios-ethereum | git tag `0.12.0` | Beacon chain consensus incl. Gloas/ePBS (first release with Glamsterdam support) |
+| alloy / alloy-consensus | 2.1.0 (consensus pinned `=2.1.0`) | Ethereum types and RPC; `alloy_consensus::Header` is the Gloas execution-header witness in `ProofInputs` |
 | axum | 0.8.3 | HTTP server |
 | redis | 0.26.0 | State store |
 

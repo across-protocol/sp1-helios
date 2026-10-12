@@ -137,11 +137,13 @@ impl<S: ConsensusSpec, R: ConsensusRpc<S> + std::fmt::Debug> Client<S, R> {
         .map_err(|_| anyhow::anyhow!("Failed to get network from chain_id: {}", chain_id))?;
         let base_config = network.to_base_config();
 
-        // `Config` no longer implements `Default` (its RPC endpoints are typed `Url`s), so
-        // start from the network's base config and override what we need.
-        let mut config = Config::from(base_config);
-        config.strict_checkpoint_age = false;
-        config.max_checkpoint_age = 604800; // 1 week
+        let config = Config {
+            chain: base_config.chain,
+            forks: base_config.forks,
+            strict_checkpoint_age: false,
+            max_checkpoint_age: 604800, // 1 week
+            ..Default::default()
+        };
 
         // In a simple case, paths_str is a coma-separated list of URLs. But that depends on which
         // R we're using. Some R's expect these "urls" to have different meaning, e.g. it can be

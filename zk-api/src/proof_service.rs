@@ -19,7 +19,6 @@ use helios_consensus_core::{
 };
 use helios_ethereum::rpc::{http_rpc::HttpRpc, ConsensusRpc};
 use serde::{de::DeserializeOwned, Serialize};
-use sp1_helios_primitives::execution::execution_anchor_hash;
 use sp1_helios_primitives::types::ProofInputs;
 use tree_hash::TreeHash;
 
@@ -343,33 +342,22 @@ where
     ///
     /// Pre-Gloas headers embed the full execution payload header, so the number is read
     /// directly. Gloas (EIP-7732) headers only commit to an execution block hash, which is
-    /// resolved via the execution RPC proxy (the returned header is verified to be the
-    /// keccak256 preimage of that hash, so a lying RPC cannot skew finality gating).
+    /// resolved via the execution RPC proxy (the returned header is verified to hash to that
+    /// commitment, so a lying RPC cannot skew finality gating).
     async fn finalized_execution_block_number(
         &self,
         header: &LightClientHeader,
     ) -> Result<u64, ProofServiceError> {
-        if let Ok(execution) = header.execution() {
-            return Ok(*execution.block_number());
-        }
-
-        let anchor_hash = execution_anchor_hash(header).map_err(|e| {
-            ProofServiceError::Internal(format!(
-                "Failed to extract execution anchor hash from finalized header: {e}"
-            ))
-        })?;
-
-        let execution_header = self
+        let (_, fields) = self
             .execution_rpc_proxy
-            .get_execution_header(anchor_hash)
+            .resolve_execution_fields(header)
             .await
             .map_err(|e| {
                 ProofServiceError::Internal(format!(
-                    "Failed to resolve execution block {anchor_hash} for finalized header: {e:#}"
+                    "Failed to resolve execution block for finalized header: {e:#}"
                 ))
             })?;
-
-        Ok(execution_header.fields.block_number)
+        Ok(fields.block_number)
     }
 
     /*
@@ -470,19 +458,17 @@ where
         let latest_finalized_header = consensus_proof_inputs.finality_update.finalized_header();
         let expected_current_slot = consensus_proof_inputs.expected_current_slot;
 
-        // Resolve the execution block this finalized header anchors to (pre-Gloas: the slot's
-        // own payload; Gloas: the builder bid's parent payload) and fetch its hash-verified
-        // RLP header. The ZK program re-verifies the same preimage, so this is the exact
-        // header the proof will be about.
-        let anchor_hash = execution_anchor_hash(&latest_finalized_header)
-            .map_err(|e| anyhow!("Failed to extract execution anchor hash: {e}"))?;
-        let execution_header = self
+        // Resolve the execution block this finalized header anchors to. Pre-Gloas headers embed
+        // the execution payload header; Gloas headers only commit to the builder bid's parent
+        // block hash, so its header is fetched and verified against that commitment. The ZK
+        // program re-runs the same verification on the witness it receives.
+        let (execution_header, execution_fields) = self
             .execution_rpc_proxy
-            .get_execution_header(anchor_hash)
+            .resolve_execution_fields(&latest_finalized_header)
             .await
-            .context("Failed to get execution block header using execution provider proxy")?;
+            .context("Failed to resolve execution header using execution provider proxy")?;
 
-        let block_id: BlockId = anchor_hash.into();
+        let block_id: BlockId = execution_fields.block_hash.into();
         debug!(target: "proof_service::input", "Fetching storage proof for address {} slot {:?} at block ID {:?}", request.src_chain_contract_address, request.src_chain_storage_slots, block_id);
 
         // Get execution part of ProofInputs
@@ -492,7 +478,7 @@ where
                 request.src_chain_contract_address,
                 &request.src_chain_storage_slots,
                 block_id,
-                execution_header.fields.state_root,
+                execution_fields.state_root,
             )
             .await
             .context("Failed to get storage proof using execution provider proxy")?;
@@ -508,7 +494,7 @@ where
             genesis_root: consensus_proof_inputs.config.chain.genesis_root,
             forks: consensus_proof_inputs.config.forks.clone(),
             contract_storage_slots: contract_storage,
-            execution_block_header_rlp: execution_header.rlp,
+            execution_header,
         };
 
         Ok(inputs)

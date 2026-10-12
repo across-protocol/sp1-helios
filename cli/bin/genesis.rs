@@ -9,7 +9,6 @@ use serde::{Deserialize, Serialize};
 use sp1_helios_api::consensus_client::Client;
 use sp1_helios_api::rpc_proxies::execution;
 use sp1_helios_api::{get_checkpoint, get_latest_checkpoint};
-use sp1_helios_primitives::execution::execution_anchor_hash;
 use sp1_sdk::{Elf, HashableKey, Prover, ProverClient, ProvingKey};
 use std::default::Default;
 use std::{
@@ -116,13 +115,13 @@ pub async fn main() -> Result<()> {
     let mut helios_client = Client::<MainnetConsensusSpec, HttpRpc>::from_env()?;
     helios_client.sync(checkpoint).await?;
 
-    // Resolve the execution state root through the header's execution block hash. Gloas
-    // (EIP-7732) light-client headers no longer embed the execution payload header, so the
-    // state root comes from the hash-verified RLP header fetched from an execution RPC.
-    let anchor_hash = execution_anchor_hash(&helios_client.store.finalized_header)
-        .map_err(|e| anyhow::anyhow!("Failed to extract execution anchor hash: {e}"))?;
+    // Resolve the execution state root. Gloas (EIP-7732) light-client headers no longer embed
+    // the execution payload header, only its block hash, so the header is fetched from an
+    // execution RPC and verified against that hash before its state root is used.
     let execution_proxy = execution::Proxy::try_from_env()?;
-    let execution_header = execution_proxy.get_execution_header(anchor_hash).await?;
+    let (_, execution_fields) = execution_proxy
+        .resolve_execution_fields(&helios_client.store.finalized_header)
+        .await?;
 
     let finalized_header = helios_client
         .store
@@ -183,7 +182,7 @@ pub async fn main() -> Result<()> {
         slots_per_epoch: SLOTS_PER_EPOCH,
         sync_committee_hash: format!("0x{:x}", sync_committee_hash),
         header: format!("0x{:x}", finalized_header),
-        execution_state_root: format!("0x{:x}", execution_header.fields.state_root),
+        execution_state_root: format!("0x{:x}", execution_fields.state_root),
         head,
         helios_program_vkey: pk.verifying_key().bytes32(),
         verifier: format!("0x{:x}", verifier),

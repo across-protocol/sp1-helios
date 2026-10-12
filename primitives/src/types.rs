@@ -30,12 +30,13 @@ pub struct ProofInputs {
     pub genesis_root: B256,
     pub forks: Forks,
     pub contract_storage_slots: ContractStorage,
-    /// RLP-encoded execution block header whose keccak256 must equal the execution block
-    /// hash committed to by the new finalized light-client header. The program derives
-    /// `executionStateRoot` (and the storage-proof anchor block) from it. Required since
-    /// Gloas (EIP-7732), where the light-client header no longer embeds the execution
-    /// payload header; used uniformly for pre-Gloas headers too.
-    pub execution_block_header_rlp: Bytes,
+    /// Execution block header witness for the new finalized light-client header. Required
+    /// from Gloas (EIP-7732) onwards, where the light-client header no longer embeds the
+    /// execution payload header and only commits to its block hash. The program verifies the
+    /// witness hashes to that commitment before reading any field from it. Ignored (and
+    /// unnecessary) for pre-Gloas headers, which carry the payload header inline.
+    #[serde(default)]
+    pub execution_header: Option<alloy_consensus::Header>,
 }
 
 #[derive(serde::Serialize, serde::Deserialize, Debug)]

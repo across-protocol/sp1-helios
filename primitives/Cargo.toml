@@ -9,6 +9,7 @@ authors.workspace = true
 serde = { workspace = true }
 helios-consensus-core = { workspace = true }
 alloy-sol-types = { workspace = true }
-alloy-primitives = { workspace = true, features = ["rlp"] }
-alloy-rlp = { workspace = true }
+alloy-primitives = { workspace = true }
+alloy-consensus = { workspace = true }
 alloy-trie = { workspace = true }
+anyhow = { workspace = true }
