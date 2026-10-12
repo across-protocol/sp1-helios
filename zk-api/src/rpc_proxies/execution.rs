@@ -1,4 +1,5 @@
 use alloy::{
+    consensus::Header,
     eips::BlockId,
     network::Ethereum,
     providers::{Provider as _, ProviderBuilder, RootProvider},
@@ -8,12 +9,15 @@ use alloy_primitives::{Address, B256};
 use anyhow::anyhow;
 use anyhow::{Context, Result};
 use futures::future::FutureExt;
+use helios_consensus_core::types::LightClientHeader;
 use reqwest::Url;
+use sp1_helios_primitives::execution::{verified_execution_fields, ExecutionFields};
+use sp1_helios_primitives::verify_storage_slot_proofs;
 use std::{env, time::Duration};
 use tokio::time::timeout;
 use tracing::warn;
 
-use crate::{types::ContractStorageBuilder, verify_storage_slot_proofs};
+use crate::types::ContractStorageBuilder;
 
 use super::multiplex;
 
@@ -93,6 +97,66 @@ impl Proxy {
         Ok(proof)
     }
 
+    /// Resolves the execution block a finalized light-client header anchors to.
+    ///
+    /// Pre-Gloas headers embed the execution payload header, so no witness is needed. Gloas
+    /// (EIP-7732) headers only commit to an execution block hash, so the full header is fetched
+    /// from the execution RPC and verified to hash to that commitment. The returned witness is
+    /// what goes into `ProofInputs::execution_header`; the ZK program re-runs the same check.
+    pub async fn resolve_execution_fields(
+        &self,
+        finalized_header: &LightClientHeader,
+    ) -> Result<(Option<Header>, ExecutionFields)> {
+        let witness = match finalized_header {
+            LightClientHeader::Gloas(header) => Some(
+                self.get_execution_header(header.execution_block_hash)
+                    .await
+                    .context("Failed to fetch Gloas execution header witness")?,
+            ),
+            _ => None,
+        };
+        let fields = verified_execution_fields(finalized_header, witness.as_ref())?;
+        Ok((witness, fields))
+    }
+
+    /// Fetches the execution block header for `block_hash` and verifies it hashes to
+    /// `block_hash` before returning it. Multiplexes across the available RPC providers.
+    ///
+    /// The hash check both rejects lying RPCs and fails loudly if the local alloy version
+    /// cannot round-trip a new fork's header layout (e.g. a header field added by a hard fork
+    /// that this build's alloy does not know yet).
+    pub async fn get_execution_header(&self, block_hash: B256) -> Result<Header> {
+        multiplex(
+            |client| {
+                (async move { Self::get_execution_header_and_check(client, block_hash).await })
+                    .boxed()
+            },
+            &self.providers,
+        )
+        .await
+    }
+
+    async fn get_execution_header_and_check(
+        client: RootProvider<Ethereum>,
+        block_hash: B256,
+    ) -> Result<Header> {
+        let block = timeout(Duration::from_secs(4), client.get_block_by_hash(block_hash))
+            .await
+            .map_err(|e| anyhow!("get_block_by_hash timed out after {:#?}", e))?
+            .map_err(|e| anyhow!("rpc error: {:#?}", e))?
+            .ok_or_else(|| anyhow!("block {} not found", block_hash))?;
+
+        let header = block.header.inner;
+        let hash = header.hash_slow();
+        if hash != block_hash {
+            return Err(anyhow!(
+                "execution header from RPC hashes to {hash}, expected {block_hash} — lying RPC, \
+                or this alloy version cannot round-trip the current fork's header layout"
+            ));
+        }
+        Ok(header)
+    }
+
     /// Requests Merkle proof from execution client. Times out if it rpc call takes longer than 4 seconds
     // todo? consider adding retries with exp. backoff.
     async fn get_proof_and_check(
@@ -112,7 +176,7 @@ impl Proxy {
             Ok(Ok(proof)) => {
                 // verify Merkle proof response from this RPC before returning Ok()
                 let contract_storage = ContractStorageBuilder::build(&keys, proof.clone())?;
-                _ = verify_storage_slot_proofs(state_root, contract_storage)?;
+                _ = verify_storage_slot_proofs(state_root, &contract_storage)?;
                 Ok(proof)
             }
             Ok(Err(e)) => Err(anyhow!("rpc error: {:#?}", e)),

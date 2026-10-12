@@ -19,7 +19,7 @@ Client → ZK-API (Axum + Redis) → SP1 Prover Network → Proof
 - `redis_store.rs` — Proof state persistence
 - `consensus_client/mod.rs` — Beacon chain client (wraps Helios)
 
-**Primitives** (`primitives/`) — Shared types: `ProofInputs`, `ProofOutputs`, `StorageSlot`, `ContractStorage`.
+**Primitives** (`primitives/`) — Shared types (`ProofInputs`, `ProofOutputs`, `StorageSlot`, `ContractStorage`) plus the verification logic both guest and host run: `verify_storage_slot_proofs` (MPT account + slot proofs) and `execution::verified_execution_fields` (Gloas execution-header witness).
 
 **ELF** (`elf/sp1-helios-elf`) — Pre-built ZK program binary (~1.6MB). Rebuilt via `cargo prove build --docker --tag v6.8.1`.
 
@@ -58,8 +58,8 @@ cargo clippy --all-features --all-targets
 | Crate | Version | Purpose |
 |-------|---------|---------|
 | sp1-zkvm / sp1-sdk | 6.8.1 | ZK VM and proof generation |
-| helios-consensus-core / helios-ethereum | 0.9.4 | Beacon chain consensus |
-| alloy | 1.0.37 | Ethereum types and RPC |
+| helios-consensus-core / helios-ethereum | git tag `0.12.0` | Beacon chain consensus incl. Gloas/ePBS (first release with Glamsterdam support) |
+| alloy / alloy-consensus | 2.1.0 (consensus pinned `=2.1.0`) | Ethereum types and RPC; `alloy_consensus::Header` is the Gloas execution-header witness in `ProofInputs` |
 | axum | 0.8.3 | HTTP server |
 | redis | 0.26.0 | State store |
 
@@ -102,4 +102,4 @@ After updating all of the above, run `cargo update` to refresh `Cargo.lock` and 
 
 ## Environment
 
-See `.env.example`. Key vars: `CONSENSUS_RPCS_LIST`, `SOURCE_EXECUTION_RPC_URL`, `REDIS_URL`, `SP1_PROVER` (mock/network).
+See `.env.example`. Key vars: `CONSENSUS_RPCS_LIST`, `SOURCE_EXECUTION_RPC_URL`, `SOURCE_CHAIN_ID`, `REDIS_URL`, `REDIS_LOCK_DURATION_SECS`, `PORT`, `SP1_PROVER` (mock/network, plus `NETWORK_PRIVATE_KEY` for network), and `INIT_CHECKPOINT` for the first boot against an empty Redis.
