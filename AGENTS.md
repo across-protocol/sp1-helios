@@ -102,4 +102,4 @@ After updating all of the above, run `cargo update` to refresh `Cargo.lock` and 
 
 ## Environment
 
-See `.env.example`. Key vars: `CONSENSUS_RPCS_LIST`, `SOURCE_EXECUTION_RPC_URL`, `REDIS_URL`, `SP1_PROVER` (mock/network).
+See `.env.example`. Key vars: `CONSENSUS_RPCS_LIST`, `SOURCE_EXECUTION_RPC_URL`, `SOURCE_CHAIN_ID`, `REDIS_URL`, `REDIS_LOCK_DURATION_SECS`, `PORT`, `SP1_PROVER` (mock/network, plus `NETWORK_PRIVATE_KEY` for network), and `INIT_CHECKPOINT` for the first boot against an empty Redis.
