@@ -106,58 +106,73 @@ where
         let proof_id = ProofId::new(&request);
         let proof_request_state = self.get_proof(&proof_id).await?;
 
-        if redis_lock_acquired {
-            debug!(target: "proof_service::api", "Global lock acquired for new proof request ID: {}", proof_id);
-
-            let finalized_header =
-                self.redis_store
-                    .read_finalized_header()
-                    .await?
-                    .ok_or_else(|| {
-                        ProofServiceError::Internal(
-                            "No finalized header available in redis. Wait and try again"
-                                .to_string(),
-                        )
-                    })?;
-
-            let finalized_block_number = self
-                .finalized_execution_block_number(&finalized_header)
-                .await?;
-
-            match proof_request_state {
-                Some(state) => match state.status {
-                    ProofRequestStatus::Errored => {
-                        let proof_status = self
-                            .initialize_request_locked(
-                                finalized_header.beacon().slot,
-                                finalized_block_number,
-                                request,
-                            )
-                            .await?;
-                        Ok((proof_id, proof_status))
-                    }
-                    _ => Ok((proof_id, state.status)),
-                },
-                None => {
-                    let proof_status = self
-                        .initialize_request_locked(
-                            finalized_header.beacon().slot,
-                            finalized_block_number,
-                            request,
-                        )
-                        .await?;
-                    Ok((proof_id, proof_status))
-                }
+        match (proof_request_state, redis_lock_acquired) {
+            // A request that is already tracked and not errored is answered from its stored
+            // state alone, so a retry never depends on the finalized header or on any RPC.
+            (Some(state), _) if state.status != ProofRequestStatus::Errored => {
+                Ok((proof_id, state.status))
             }
-        } else {
-            // --- Lock Not Acquired ---
-            match proof_request_state {
-                Some(state) => Ok((proof_id, state.status)),
-                // Lock exists, but state doesn't. This is either a race with other worker, or the
-                // other worker crashed before releasing the lock and the lock has not expired
-                None => Err(ProofServiceError::LockContention(proof_id)),
+            // Errored requests are re-initialized below, which needs the lock.
+            (Some(state), false) => Ok((proof_id, state.status)),
+            // Lock exists, but state doesn't. This is either a race with other worker, or the
+            // other worker crashed before releasing the lock and the lock has not expired
+            (None, false) => Err(ProofServiceError::LockContention(proof_id)),
+            (_, true) => {
+                debug!(target: "proof_service::api", "Global lock acquired for new proof request ID: {}", proof_id);
+
+                let (finalized_header, finalized_block_number) =
+                    self.stored_finalized_header_locked().await?;
+
+                let proof_status = self
+                    .initialize_request_locked(
+                        finalized_header.beacon().slot,
+                        finalized_block_number,
+                        request,
+                    )
+                    .await?;
+                Ok((proof_id, proof_status))
             }
         }
+    }
+
+    /// Reads the finalized header and its execution block number from Redis.
+    ///
+    /// The block number is persisted next to the header by the finalized-header loop, so this
+    /// normally costs one Redis round trip and no RPC. A header stored by a version that did
+    /// not persist the number is resolved once and backfilled. Assumes the global lock is held,
+    /// which keeps the backfilled number consistent with the stored header.
+    async fn stored_finalized_header_locked(
+        &mut self,
+    ) -> Result<(LightClientHeader, u64), ProofServiceError> {
+        let (finalized_header, block_number) = self
+            .redis_store
+            .read_finalized_header_and_block_number()
+            .await?
+            .ok_or_else(|| {
+                ProofServiceError::Internal(
+                    "No finalized header available in redis. Wait and try again".to_string(),
+                )
+            })?;
+
+        let block_number = match block_number {
+            Some(block_number) => block_number,
+            None => {
+                info!(
+                    target: "proof_service::api",
+                    "Finalized header in redis (slot {}) has no stored execution block number; resolving and backfilling it",
+                    finalized_header.beacon().slot
+                );
+                let block_number = self
+                    .finalized_execution_block_number(&finalized_header)
+                    .await?;
+                self.redis_store
+                    .set_finalized_execution_block_number(block_number)
+                    .await?;
+                block_number
+            }
+        };
+
+        Ok((finalized_header, block_number))
     }
 
     /// This function assumes that the corresponding global lock is held.
@@ -227,13 +242,22 @@ where
         &mut self,
         latest_finalized_header: LightClientHeader,
     ) -> Result<bool, ProofServiceError> {
+        // Resolve the execution block number before taking the global lock: for Gloas headers
+        // this is an execution RPC round trip, which must not hold up other workers.
+        let finalized_block_number = self
+            .finalized_execution_block_number(&latest_finalized_header)
+            .await?;
+
         self.with_global_lock(
-            latest_finalized_header,
-            |this, latest_finalized_header, lock_acquired: bool| {
+            (latest_finalized_header, finalized_block_number),
+            |this, (latest_finalized_header, finalized_block_number), lock_acquired: bool| {
                 Box::pin(async move {
                     if lock_acquired {
-                        this.process_new_finalized_header_locked(latest_finalized_header)
-                            .await?;
+                        this.process_new_finalized_header_locked(
+                            latest_finalized_header,
+                            finalized_block_number,
+                        )
+                        .await?;
                         // If the above function did not error, stored state in redis is equal or newer than the proposed latest_finalized_header
                         Ok(true)
                     } else {
@@ -247,10 +271,12 @@ where
         .await
     }
 
-    /// Same as `process_new_finalized_header`, but assumes the redis lock is held
+    /// Same as `process_new_finalized_header`, but assumes the redis lock is held and that
+    /// `finalized_block_number` is the verified execution block number for the header.
     async fn process_new_finalized_header_locked(
         &mut self,
         latest_finalized_header: LightClientHeader,
+        finalized_block_number: u64,
     ) -> Result<(), ProofServiceError> {
         let stored_finalized_header = self.redis_store.read_finalized_header().await?;
         let should_update_header: bool = match stored_finalized_header {
@@ -266,9 +292,6 @@ where
                 .find_requests_by_status(ProofRequestStatus::WaitingForFinality)
                 .await?;
 
-            let finalized_block_number = self
-                .finalized_execution_block_number(&latest_finalized_header)
-                .await?;
             let finalized_slot = latest_finalized_header.beacon().slot;
 
             let mut updated_states = Vec::new();
@@ -287,9 +310,13 @@ where
                 }
             }
 
-            // Use redis_store to update header and states atomically
+            // Use redis_store to update header, its block number and states atomically
             self.redis_store
-                .update_finalized_header_and_proof_states(&latest_finalized_header, updated_states)
+                .update_finalized_header_and_proof_states(
+                    &latest_finalized_header,
+                    finalized_block_number,
+                    updated_states,
+                )
                 .await?;
 
             // Spawn tasks for requests that moved to Generating
