@@ -1,8 +1,9 @@
 //! Fallback behaviour of the checkpoint fetch against unresponsive consensus RPCs.
 //!
-//! Each test stands up local TCP listeners standing in for beacon API endpoints: one that
-//! stalls and one that answers. The fetch must give up on the stalled primary within the
-//! configured timeout and return the root served by the healthy backup.
+//! Each test stands up local TCP listeners standing in for beacon API endpoints. The primary
+//! is tried first; once it times out, the backups are raced and the healthy one must answer.
+//! When every endpoint stalls the call must still fail within the configured timeouts
+//! instead of hanging.
 
 use alloy_primitives::{b256, B256};
 use sp1_helios_api::try_get_checkpoint_from;
@@ -115,14 +116,50 @@ async fn falls_back_when_primary_stalls_mid_body() {
 }
 
 #[tokio::test]
+async fn answers_from_primary_without_touching_backups() {
+    let primary = healthy().await;
+    let backup = stalled_before_headers().await;
+    let started = Instant::now();
+    let root = tokio::time::timeout(
+        TEST_DEADLINE,
+        try_get_checkpoint_from(&[primary, backup], SLOT, TIMEOUT),
+    )
+    .await
+    .expect("fetch did not complete before the test deadline")
+    .expect("healthy primary should answer");
+
+    assert_eq!(root, ROOT);
+    assert!(
+        started.elapsed() < TIMEOUT,
+        "a healthy primary should not wait on the backup timeout"
+    );
+}
+
+#[tokio::test]
 async fn errors_when_every_rpc_stalls() {
     let rpcs = [stalled_before_headers().await, stalled_during_body().await];
+    let started = Instant::now();
     let err = tokio::time::timeout(TEST_DEADLINE, try_get_checkpoint_from(&rpcs, SLOT, TIMEOUT))
         .await
         .expect("fetch did not complete before the test deadline")
         .expect_err("no endpoint answered");
+    let elapsed = started.elapsed();
+
+    // Primary times out, then the backups are raced and time out too.
+    assert!(
+        elapsed >= TIMEOUT * 2,
+        "primary and backups were not each given the full timeout ({elapsed:?})"
+    );
     assert!(
         err.to_string().contains(&rpcs[1]),
-        "error should name the last endpoint tried: {err}"
+        "error should name the failed backup: {err}"
     );
+}
+
+#[tokio::test]
+async fn errors_when_no_rpcs_configured() {
+    let err = try_get_checkpoint_from(&[], SLOT, TIMEOUT)
+        .await
+        .expect_err("empty RPC list");
+    assert!(err.to_string().contains("CONSENSUS_RPCS_LIST"), "{err}");
 }
