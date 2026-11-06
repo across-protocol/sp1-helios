@@ -1,5 +1,6 @@
 use alloy_primitives::B256;
 use anyhow::anyhow;
+use std::time::Duration;
 
 use helios_ethereum::config::{checkpoints, networks::Network};
 
@@ -49,8 +50,32 @@ pub async fn get_checkpoint(slot: u64) -> B256 {
     try_get_checkpoint(slot).await.unwrap()
 }
 
+/// Upper bound on a single checkpoint request, covering connection, headers and body decoding.
+/// Without it a primary RPC that accepts the connection but never answers would block the
+/// sequential fallback loop and keep healthy backups from ever being tried.
+pub const CHECKPOINT_RPC_TIMEOUT: Duration = Duration::from_secs(10);
+
 /// Fetch checkpoint from a slot number. This function only works for slots that are the 1st slot in their epoch
 pub async fn try_get_checkpoint(slot: u64) -> anyhow::Result<B256> {
+    let rpcs =
+        std::env::var("CONSENSUS_RPCS_LIST").map_err(|_| anyhow!("CONSENSUS_RPCS_LIST not set"))?;
+    let rpcs: Vec<String> = rpcs
+        .split(',')
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_owned)
+        .collect();
+    try_get_checkpoint_from(&rpcs, slot, CHECKPOINT_RPC_TIMEOUT).await
+}
+
+/// Fetch the beacon block root at `slot` from the first of `rpcs` that answers, in order.
+/// Each request, including its response body, is bounded by `timeout` so a stalled
+/// endpoint falls through to the next one.
+pub async fn try_get_checkpoint_from(
+    rpcs: &[String],
+    slot: u64,
+    timeout: Duration,
+) -> anyhow::Result<B256> {
     // The beacon block root at `slot` *is* the checkpoint. Query the standard beacon API
     // directly: the helios `ConsensusRpc` trait no longer exposes block fetching.
     #[derive(serde::Deserialize)]
@@ -62,12 +87,10 @@ pub async fn try_get_checkpoint(slot: u64) -> anyhow::Result<B256> {
         root: B256,
     }
 
-    let rpcs =
-        std::env::var("CONSENSUS_RPCS_LIST").map_err(|_| anyhow!("CONSENSUS_RPCS_LIST not set"))?;
-    let client = reqwest::Client::new();
+    let client = reqwest::Client::builder().timeout(timeout).build()?;
 
     let mut last_err = anyhow!("no consensus RPCs configured in CONSENSUS_RPCS_LIST");
-    for rpc in rpcs.split(',').map(str::trim).filter(|s| !s.is_empty()) {
+    for rpc in rpcs {
         let url = format!(
             "{}/eth/v1/beacon/headers/{}",
             rpc.trim_end_matches('/'),
