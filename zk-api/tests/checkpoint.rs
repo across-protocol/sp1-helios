@@ -6,7 +6,7 @@
 //! instead of hanging.
 
 use alloy_primitives::{b256, B256};
-use sp1_helios_api::try_get_checkpoint_from;
+use sp1_helios_api::consensus_client::checkpoint::fetch_checkpoint_from;
 use std::time::{Duration, Instant};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
@@ -91,7 +91,7 @@ async fn assert_falls_back_to_backup(primary: String) {
     let started = Instant::now();
     let root = tokio::time::timeout(
         TEST_DEADLINE,
-        try_get_checkpoint_from(&[primary, backup], SLOT, TIMEOUT),
+        fetch_checkpoint_from(&[primary, backup], SLOT, TIMEOUT),
     )
     .await
     .expect("fetch did not complete before the test deadline")
@@ -122,7 +122,7 @@ async fn answers_from_primary_without_touching_backups() {
     let started = Instant::now();
     let root = tokio::time::timeout(
         TEST_DEADLINE,
-        try_get_checkpoint_from(&[primary, backup], SLOT, TIMEOUT),
+        fetch_checkpoint_from(&[primary, backup], SLOT, TIMEOUT),
     )
     .await
     .expect("fetch did not complete before the test deadline")
@@ -139,7 +139,7 @@ async fn answers_from_primary_without_touching_backups() {
 async fn errors_when_every_rpc_stalls() {
     let rpcs = [stalled_before_headers().await, stalled_during_body().await];
     let started = Instant::now();
-    let err = tokio::time::timeout(TEST_DEADLINE, try_get_checkpoint_from(&rpcs, SLOT, TIMEOUT))
+    let err = tokio::time::timeout(TEST_DEADLINE, fetch_checkpoint_from(&rpcs, SLOT, TIMEOUT))
         .await
         .expect("fetch did not complete before the test deadline")
         .expect_err("no endpoint answered");
@@ -158,7 +158,7 @@ async fn errors_when_every_rpc_stalls() {
 
 #[tokio::test]
 async fn errors_when_no_rpcs_configured() {
-    let err = try_get_checkpoint_from(&[], SLOT, TIMEOUT)
+    let err = fetch_checkpoint_from(&[], SLOT, TIMEOUT)
         .await
         .expect_err("empty RPC list");
     assert!(err.to_string().contains("CONSENSUS_RPCS_LIST"), "{err}");

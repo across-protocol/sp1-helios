@@ -28,6 +28,8 @@ use tracing::{debug, info, warn};
 
 use crate::api::ProofRequest;
 
+pub mod checkpoint;
+
 pub const MAX_REQUEST_LIGHT_CLIENT_UPDATES: u8 = 128;
 const CONENSUS_RPCS_ENV_VAR: &str = "CONSENSUS_RPCS_LIST";
 

@@ -3,9 +3,6 @@ use alloy_primitives::{keccak256, Bytes, FixedBytes, B256};
 use alloy_rlp::Encodable;
 use alloy_trie::{proof, Nibbles};
 use anyhow::anyhow;
-use futures::future::FutureExt;
-use std::time::Duration;
-use tracing::warn;
 
 use helios_ethereum::config::{checkpoints, networks::Network};
 use sp1_helios_primitives::types::{ContractStorage, VerifiedStorageSlot};
@@ -22,8 +19,6 @@ pub mod util;
 #[path = "tracing/mod.rs"]
 pub mod tracing_setup;
 pub use tracing_setup::init_tracing;
-
-use rpc_proxies::multiplex;
 
 /// Fetch latest checkpoint from chain to bootstrap client to the latest state.
 /// Panics if any step fails.
@@ -58,94 +53,11 @@ pub async fn get_checkpoint(slot: u64) -> B256 {
     try_get_checkpoint(slot).await.unwrap()
 }
 
-/// Upper bound on a single checkpoint request, covering connection, headers and body decoding.
-/// Without it a primary RPC that accepts the connection but never answers would block the
-/// sequential fallback loop and keep healthy backups from ever being tried.
-pub const CHECKPOINT_RPC_TIMEOUT: Duration = Duration::from_secs(10);
-
-/// Fetch checkpoint from a slot number. This function only works for slots that are the 1st slot in their epoch
+/// Fetch checkpoint from a slot number. This function only works for slots that are the 1st slot in their epoch.
+/// Delegates to [`consensus_client::checkpoint::fetch_checkpoint`], which owns the beacon API
+/// request, its timeout and the primary-then-backups fallback policy.
 pub async fn try_get_checkpoint(slot: u64) -> anyhow::Result<B256> {
-    let rpcs =
-        std::env::var("CONSENSUS_RPCS_LIST").map_err(|_| anyhow!("CONSENSUS_RPCS_LIST not set"))?;
-    let rpcs: Vec<String> = rpcs
-        .split(',')
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
-        .map(str::to_owned)
-        .collect();
-    try_get_checkpoint_from(&rpcs, slot, CHECKPOINT_RPC_TIMEOUT).await
-}
-
-/// Fetch the beacon block root at `slot`, trying the primary RPC first and falling back to
-/// the remaining RPCs concurrently (through the shared [`multiplex`] helper) if it fails.
-/// Each request, including its response body, is bounded by `timeout` so a stalled
-/// endpoint cannot block the fallback or hang the call.
-pub async fn try_get_checkpoint_from(
-    rpcs: &[String],
-    slot: u64,
-    timeout: Duration,
-) -> anyhow::Result<B256> {
-    let (primary, backups) = rpcs
-        .split_first()
-        .ok_or_else(|| anyhow!("no consensus RPCs configured in CONSENSUS_RPCS_LIST"))?;
-
-    let client = reqwest::Client::builder().timeout(timeout).build()?;
-
-    // 1) Try the primary RPC first
-    match fetch_block_root(&client, primary, slot).await {
-        Ok(root) => return Ok(root),
-        Err(e) => warn!(
-            target: "checkpoint",
-            "Primary RPC failed; falling back to backups for slot {}: {}", slot, e
-        ),
-    }
-
-    // 2) Race the backups and take the first that answers
-    multiplex(
-        |rpc: String| {
-            let client = client.clone();
-            async move { fetch_block_root(&client, &rpc, slot).await }.boxed()
-        },
-        backups,
-    )
-    .await
-    .map_err(|e| anyhow!("All RPCs failed to fetch checkpoint for slot {slot}: {e}"))
-}
-
-/// Fetch the beacon block root at `slot` from a single beacon API endpoint.
-async fn fetch_block_root(client: &reqwest::Client, rpc: &str, slot: u64) -> anyhow::Result<B256> {
-    // The beacon block root at `slot` *is* the checkpoint. Query the standard beacon API
-    // directly: the helios `ConsensusRpc` trait no longer exposes block fetching.
-    #[derive(serde::Deserialize)]
-    struct HeaderResponse {
-        data: HeaderData,
-    }
-    #[derive(serde::Deserialize)]
-    struct HeaderData {
-        root: B256,
-    }
-
-    let url = format!(
-        "{}/eth/v1/beacon/headers/{}",
-        rpc.trim_end_matches('/'),
-        slot
-    );
-    let response = client
-        .get(&url)
-        .send()
-        .await
-        .map_err(|e| anyhow!("request to {rpc} failed: {e}"))?;
-    if !response.status().is_success() {
-        return Err(anyhow!(
-            "{rpc} returned status {} for slot {slot}",
-            response.status()
-        ));
-    }
-    let header = response
-        .json::<HeaderResponse>()
-        .await
-        .map_err(|e| anyhow!("failed to parse header response from {rpc}: {e}"))?;
-    Ok(header.data.root)
+    consensus_client::checkpoint::fetch_checkpoint(slot).await
 }
 
 /**
