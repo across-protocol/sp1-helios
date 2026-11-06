@@ -25,7 +25,9 @@ key.
 
 ## Tests
 
-`tests/execution.rs` exercises both header shapes with synthetic fixtures:
+`tests/execution.rs` exercises both header shapes, and `tests/storage.rs` builds synthetic
+account and storage tries with alloy-trie's `HashBuilder` to cover the proof verifier. Neither
+needs RPC data:
 
 ```bash
 cargo test -p sp1-helios-primitives
