@@ -76,6 +76,17 @@ where
         format!("{}:state:finalized_header", self.key_prefix)
     }
 
+    /// Generates the Redis key for the execution block number the stored finalized header
+    /// anchors to. Kept outside the `:state:*` namespace scanned by
+    /// [`Self::find_requests_by_status`], and separate from the header key so an older
+    /// deployment that only knows the header key keeps working.
+    pub fn finalized_execution_block_number_key(&self) -> String {
+        format!(
+            "{}:finalized_header:execution_block_number",
+            self.key_prefix
+        )
+    }
+
     /// Generates a global redis lock for the service prefix.
     pub fn global_lock_key(&self) -> String {
         format!("{}:lock", self.key_prefix)
@@ -104,6 +115,35 @@ where
         self.read_json_value(&key).await
     }
 
+    /// Fetch the latest finalized header together with the execution block number it anchors
+    /// to, in a single round trip so the pair is consistent. The block number is `None` when
+    /// the header was written by a version that did not persist it.
+    pub async fn read_finalized_header_and_block_number(
+        &mut self,
+    ) -> Result<Option<(LightClientHeader, Option<u64>)>, ProofServiceError> {
+        let (header_json, block_number): (Option<String>, Option<u64>) = redis::cmd("MGET")
+            .arg(self.finalized_header_key())
+            .arg(self.finalized_execution_block_number_key())
+            .query_async(&mut self.conn_manager)
+            .await?;
+        match header_json {
+            Some(json) => Ok(Some((serde_json::from_str(&json)?, block_number))),
+            None => Ok(None),
+        }
+    }
+
+    /// Persist the execution block number for the finalized header already in Redis. Only
+    /// used to backfill a header written before the block number was persisted; the regular
+    /// path writes both atomically in [`Self::update_finalized_header_and_proof_states`].
+    pub async fn set_finalized_execution_block_number(
+        &mut self,
+        block_number: u64,
+    ) -> Result<(), ProofServiceError> {
+        let key = self.finalized_execution_block_number_key();
+        self.conn_manager.set::<_, _, ()>(key, block_number).await?;
+        Ok(())
+    }
+
     /// Set the state for a specific proof request.
     pub async fn set_proof_state(
         &mut self,
@@ -118,30 +158,25 @@ where
         Ok(())
     }
 
-    /// Set the latest finalized header.
-    pub async fn set_finalized_header(
-        &mut self,
-        header: &LightClientHeader,
-    ) -> Result<(), ProofServiceError> {
-        let key = self.finalized_header_key();
-        let json = serde_json::to_string(header)?;
-        self.conn_manager.set::<_, _, ()>(key, json).await?;
-        Ok(())
-    }
-
-    /// Atomically update the finalized header and multiple proof states.
+    /// Atomically update the finalized header, the execution block number it anchors to, and
+    /// multiple proof states.
     pub async fn update_finalized_header_and_proof_states(
         &mut self,
         latest_finalized_header: &LightClientHeader,
+        execution_block_number: u64,
         updated_states: Vec<(ProofId, ProofRequestState<ProofOutput>)>,
     ) -> Result<(), ProofServiceError> {
         let mut pipe = redis::pipe();
         pipe.atomic();
 
-        // Add the new finalized header to the transaction
+        // Add the new finalized header and its execution block number to the transaction
         pipe.set(
             self.finalized_header_key(),
             serde_json::to_string(latest_finalized_header)?,
+        );
+        pipe.set(
+            self.finalized_execution_block_number_key(),
+            execution_block_number,
         );
 
         // Add updates for each proof state

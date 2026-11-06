@@ -30,6 +30,13 @@ pub struct ProofInputs {
     pub genesis_root: B256,
     pub forks: Forks,
     pub contract_storage_slots: ContractStorage,
+    /// Execution block header witness for the new finalized light-client header. Required
+    /// from Gloas (EIP-7732) onwards, where the light-client header no longer embeds the
+    /// execution payload header and only commits to its block hash. The program verifies the
+    /// witness hashes to that commitment before reading any field from it. Ignored (and
+    /// unnecessary) for pre-Gloas headers, which carry the payload header inline.
+    #[serde(default)]
+    pub execution_header: Option<alloy_consensus::Header>,
 }
 
 #[derive(serde::Serialize, serde::Deserialize, Debug)]

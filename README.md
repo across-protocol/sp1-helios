@@ -6,7 +6,7 @@ Extends [SP1 Helios](https://succinctlabs.github.io/sp1-helios/) to support prov
 
 - **program/** — SP1 ZK program (guest code). Verifies beacon chain sync committee updates, finality, and storage proofs.
 - **zk-api/** — Axum server that tracks the beacon chain and dispatches proof requests to Succinct's prover network. Uses Redis for state.
-- **primitives/** — Shared types (`ProofInputs`, `ProofOutputs`, `StorageSlot`, etc.)
+- **primitives/** — Code shared by the program and the API: proof input/output types and the execution-header check that anchors storage proofs to the finalized header. See [primitives/README.md](primitives/README.md).
 - **elf/** — Pre-built ZK program binary.
 - **cli/** — `genesis` (initial contract state) and `vkey` (verification key) binaries.
 

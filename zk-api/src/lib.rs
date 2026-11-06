@@ -4,10 +4,8 @@ use alloy_rlp::Encodable;
 use alloy_trie::{proof, Nibbles};
 use anyhow::anyhow;
 
-use helios_consensus_core::consensus_spec::MainnetConsensusSpec;
 use helios_ethereum::config::{checkpoints, networks::Network};
 use sp1_helios_primitives::types::{ContractStorage, VerifiedStorageSlot};
-use tree_hash::TreeHash;
 
 pub mod api;
 pub mod consensus_client;
@@ -55,16 +53,11 @@ pub async fn get_checkpoint(slot: u64) -> B256 {
     try_get_checkpoint(slot).await.unwrap()
 }
 
-/// Fetch checkpoint from a slot number. This function only works for slots that are the 1st slot in their epoch
+/// Fetch checkpoint from a slot number. This function only works for slots that are the 1st slot in their epoch.
+/// Delegates to [`consensus_client::checkpoint::fetch_checkpoint`], which owns the beacon API
+/// request, its timeout and the primary-then-backups fallback policy.
 pub async fn try_get_checkpoint(slot: u64) -> anyhow::Result<B256> {
-    use consensus_client::Client;
-    use helios_ethereum::rpc::http_rpc::HttpRpc;
-
-    // Create a Client just to fetch the block (no bootstrap/sync needed)
-    let client = Client::<MainnetConsensusSpec, HttpRpc>::from_env()?;
-    let block = client.get_block(slot).await?;
-
-    Ok(B256::from_slice(block.tree_hash_root().as_ref()))
+    consensus_client::checkpoint::fetch_checkpoint(slot).await
 }
 
 /**

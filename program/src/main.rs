@@ -8,6 +8,7 @@ use alloy_trie::{proof, Nibbles};
 use helios_consensus_core::{
     apply_finality_update, apply_update, verify_finality_update, verify_update,
 };
+use sp1_helios_primitives::execution::verified_execution_fields;
 use sp1_helios_primitives::types::{
     ContractStorage, ProofInputs, ProofOutputs, VerifiedStorageSlot,
 };
@@ -17,8 +18,9 @@ use tree_hash::TreeHash;
 /// 1. Verify and apply sync committee updates, if any
 /// 2. Verify and apply finality update
 /// 3. Ensure finalized head was incremented, to confirm integrity of execution part of finalized header
-/// 4. Verify storage slot proofs
-/// 5. Commit new state root, header, and sync committee for usage in the on-chain contract
+/// 4. Authenticate the execution header (Gloas witness or embedded payload header)
+/// 5. Verify storage slot proofs
+/// 6. Commit new state root, header, and sync committee for usage in the on-chain contract
 pub fn main() {
     let encoded_inputs = sp1_zkvm::io::read_vec();
 
@@ -30,6 +32,7 @@ pub fn main() {
         genesis_root,
         forks,
         contract_storage_slots,
+        execution_header,
     } = serde_cbor::from_slice(&encoded_inputs).unwrap();
 
     // Don't allow `next_sync_committee`, a free input, to be propagated to ProofOutputs. It will only
@@ -78,16 +81,18 @@ pub fn main() {
     // this newer slot, due to checks against beacon_body_root performed during update verification.
     assert!(store.finalized_header.beacon().slot > prev_head);
 
-    let execution_state_root = *store
-        .finalized_header
-        .execution()
-        .expect("Execution payload doesn't exist.")
-        .state_root();
+    // 4. Authenticate the execution header. Pre-Gloas, the finalized light-client header embeds
+    // the execution payload header (proven against body_root during update verification).
+    // From Gloas, it only commits to the builder bid's parent execution block hash, so the
+    // supplied witness header must hash to that commitment before its fields are trusted.
+    let execution = verified_execution_fields(&store.finalized_header, execution_header.as_ref())
+        .expect("Execution header failed to verify.");
+    let execution_state_root = execution.state_root;
 
-    // 4. Verify storage slot proofs
+    // 5. Verify storage slot proofs
     let verified_slots = verify_storage_slot_proofs(execution_state_root, contract_storage_slots);
 
-    // 5. Commit new state root, header, and sync committee for usage in the on-chain contract
+    // 6. Commit new state root, header, and sync committee for usage in the on-chain contract
     let header: B256 = store.finalized_header.beacon().tree_hash_root();
     let sync_committee_hash: B256 = store.current_sync_committee.tree_hash_root();
     let next_sync_committee_hash: B256 = match &mut store.next_sync_committee {

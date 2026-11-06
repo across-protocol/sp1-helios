@@ -1,13 +1,16 @@
 use alloy::signers::local::PrivateKeySigner;
 use alloy_primitives::Address;
-use anyhow::Result;
+use anyhow::{Context, Result};
 /// Generate genesis parameters for light client contract
 use clap::Parser;
 use helios_consensus_core::consensus_spec::MainnetConsensusSpec;
+use helios_consensus_core::types::LightClientHeader;
 use helios_ethereum::rpc::http_rpc::HttpRpc;
 use serde::{Deserialize, Serialize};
 use sp1_helios_api::consensus_client::Client;
+use sp1_helios_api::rpc_proxies::execution;
 use sp1_helios_api::{get_checkpoint, get_latest_checkpoint};
+use sp1_helios_primitives::execution::{verified_execution_fields, ExecutionFields};
 use sp1_sdk::{Elf, HashableKey, Prover, ProverClient, ProvingKey};
 use std::default::Default;
 use std::{
@@ -114,6 +117,8 @@ pub async fn main() -> Result<()> {
     let mut helios_client = Client::<MainnetConsensusSpec, HttpRpc>::from_env()?;
     helios_client.sync(checkpoint).await?;
 
+    let execution_fields = resolve_execution_fields(&helios_client.store.finalized_header).await?;
+
     let finalized_header = helios_client
         .store
         .finalized_header
@@ -173,15 +178,7 @@ pub async fn main() -> Result<()> {
         slots_per_epoch: SLOTS_PER_EPOCH,
         sync_committee_hash: format!("0x{:x}", sync_committee_hash),
         header: format!("0x{:x}", finalized_header),
-        execution_state_root: format!(
-            "0x{:x}",
-            helios_client
-                .store
-                .finalized_header
-                .execution()
-                .expect("Execution payload doesn't exist.")
-                .state_root()
-        ),
+        execution_state_root: format!("0x{:x}", execution_fields.state_root),
         head,
         helios_program_vkey: pk.verifying_key().bytes32(),
         verifier: format!("0x{:x}", verifier),
@@ -192,6 +189,28 @@ pub async fn main() -> Result<()> {
     write_genesis_config(&workspace_root, &genesis_config, args.out)?;
 
     Ok(())
+}
+
+/// Resolves the execution fields (state root, block number) the finalized header anchors to.
+///
+/// Pre-Gloas headers embed the execution payload header, so the fields are read from the
+/// header itself and no execution RPC is needed. Gloas (EIP-7732) headers only commit to an
+/// execution block hash, so the header is fetched from `SOURCE_EXECUTION_RPC_URL` and verified
+/// against that hash. The RPC is only required for the Gloas path so that deployment flows
+/// configured with beacon RPCs alone keep working for pre-Gloas checkpoints.
+async fn resolve_execution_fields(finalized_header: &LightClientHeader) -> Result<ExecutionFields> {
+    if !matches!(finalized_header, LightClientHeader::Gloas(_)) {
+        return verified_execution_fields(finalized_header, None);
+    }
+
+    let execution_proxy = execution::Proxy::try_from_env().context(
+        "the checkpoint is a Gloas header, which requires SOURCE_EXECUTION_RPC_URL to fetch \
+         and verify the execution header it commits to",
+    )?;
+    let (_, execution_fields) = execution_proxy
+        .resolve_execution_fields(finalized_header)
+        .await?;
+    Ok(execution_fields)
 }
 
 fn find_project_root() -> Option<PathBuf> {
