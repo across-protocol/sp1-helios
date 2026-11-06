@@ -12,12 +12,11 @@ use futures::future::FutureExt;
 use helios_consensus_core::types::LightClientHeader;
 use reqwest::Url;
 use sp1_helios_primitives::execution::{verified_execution_fields, ExecutionFields};
-use sp1_helios_primitives::verify_storage_slot_proofs;
 use std::{env, time::Duration};
 use tokio::time::timeout;
 use tracing::warn;
 
-use crate::types::ContractStorageBuilder;
+use crate::{types::ContractStorageBuilder, verify_storage_slot_proofs};
 
 use super::multiplex;
 
@@ -176,7 +175,7 @@ impl Proxy {
             Ok(Ok(proof)) => {
                 // verify Merkle proof response from this RPC before returning Ok()
                 let contract_storage = ContractStorageBuilder::build(&keys, proof.clone())?;
-                _ = verify_storage_slot_proofs(state_root, &contract_storage)?;
+                _ = verify_storage_slot_proofs(state_root, contract_storage)?;
                 Ok(proof)
             }
             Ok(Err(e)) => Err(anyhow!("rpc error: {:#?}", e)),

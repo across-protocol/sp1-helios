@@ -133,8 +133,9 @@ pub enum ProofServiceError {
     Internal(String),
 }
 
-/// Builds the `ContractStorage` proof input from an `eth_getProof` response. The RPC-shaped
-/// conversion lives here, on the host, so `primitives` holds only what the ZK program itself needs.
+/**
+ * @dev `ContractStorageBuilder` is a helper type to not add any implementations into `primitives/src/`, as that has been audited
+ */
 pub struct ContractStorageBuilder;
 impl ContractStorageBuilder {
     pub fn build(
