@@ -18,10 +18,16 @@ key.
   and must hash to that commitment. The guest runs this check before verifying storage proofs
   against the state root; the host runs the same check when assembling `ProofInputs` and when
   resolving the finalized execution block number.
+- **`storage`** — `verify_storage_slot_proofs` checks a contract's account proof against that
+  `state_root` and each requested slot proof against the account's `storage_root`, returning the
+  `VerifiedStorageSlot`s the program commits to. The guest aborts the proof on failure; the host
+  runs the same function to reject a bad `eth_getProof` response before requesting a proof.
 
 ## Tests
 
-`tests/execution.rs` exercises both header shapes with synthetic fixtures:
+`tests/execution.rs` exercises both header shapes, and `tests/storage.rs` builds synthetic
+account and storage tries with alloy-trie's `HashBuilder` to cover the proof verifier. Neither
+needs RPC data:
 
 ```bash
 cargo test -p sp1-helios-primitives
