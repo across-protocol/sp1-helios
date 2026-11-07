@@ -1,17 +1,34 @@
 use crate::types::{ProofId, ProofRequestState, ProofRequestStatus, ProofServiceError};
+use alloy_primitives::B256;
 use anyhow::{anyhow, Context};
 use helios_consensus_core::types::LightClientHeader;
 use redis::{
     aio::{ConnectionManager, ConnectionManagerConfig},
     AsyncCommands, Client,
 };
-use serde::{de::DeserializeOwned, Serialize};
+use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use std::{env, marker::PhantomData, time::Duration};
 use tracing::{debug, info, warn};
+use tree_hash::TreeHash;
+use uuid::Uuid;
 
 // todo: change to .env variable once our deployment env is ready for that
 pub const PROOF_STATE_TTL_SECS: u64 = 7 * 24 * 60 * 60; // 1 week
 pub const REDIS_TIMEOUT_SECS: u64 = 10;
+
+#[derive(Deserialize, Serialize)]
+struct FinalizedExecution {
+    header_root: B256,
+    block_number: u64,
+}
+
+/// A consistent read of the header and any execution metadata authenticated for it.
+pub(crate) struct StoredFinalizedHeader {
+    pub header: LightClientHeader,
+    pub block_number: Option<u64>,
+    // Preserve the exact Redis value for conditional writes, including legacy encodings.
+    encoded: String,
+}
 
 pub struct RedisStore<ProofOutput>
 where
@@ -76,15 +93,10 @@ where
         format!("{}:state:finalized_header", self.key_prefix)
     }
 
-    /// Generates the Redis key for the execution block number the stored finalized header
-    /// anchors to. Kept outside the `:state:*` namespace scanned by
-    /// [`Self::find_requests_by_status`], and separate from the header key so an older
-    /// deployment that only knows the header key keeps working.
-    pub fn finalized_execution_block_number_key(&self) -> String {
-        format!(
-            "{}:finalized_header:execution_block_number",
-            self.key_prefix
-        )
+    // A new key avoids changing the format read by older deployments. The old unbound
+    // execution_block_number key is not trusted. Keep metadata outside the proof-state scan.
+    fn finalized_execution_key(&self) -> String {
+        format!("{}:finalized_header:execution", self.key_prefix)
     }
 
     /// Generates a global redis lock for the service prefix.
@@ -115,33 +127,33 @@ where
         self.read_json_value(&key).await
     }
 
-    /// Fetch the latest finalized header together with the execution block number it anchors
-    /// to, in a single round trip so the pair is consistent. The block number is `None` when
-    /// the header was written by a version that did not persist it.
-    pub async fn read_finalized_header_and_block_number(
+    /// Read the header and its cached execution number atomically. A legacy writer can update
+    /// only the header, so cached metadata is usable only when its header root still matches.
+    pub(crate) async fn read_finalized_header_and_block_number(
         &mut self,
-    ) -> Result<Option<(LightClientHeader, Option<u64>)>, ProofServiceError> {
-        let (header_json, block_number): (Option<String>, Option<u64>) = redis::cmd("MGET")
+    ) -> Result<Option<StoredFinalizedHeader>, ProofServiceError> {
+        let (header_json, execution_json): (Option<String>, Option<String>) = redis::cmd("MGET")
             .arg(self.finalized_header_key())
-            .arg(self.finalized_execution_block_number_key())
+            .arg(self.finalized_execution_key())
             .query_async(&mut self.conn_manager)
             .await?;
         match header_json {
-            Some(json) => Ok(Some((serde_json::from_str(&json)?, block_number))),
+            Some(encoded) => {
+                let header: LightClientHeader = serde_json::from_str(&encoded)?;
+                let execution = execution_json
+                    .map(|json| serde_json::from_str::<FinalizedExecution>(&json))
+                    .transpose()?;
+                let block_number = execution
+                    .filter(|execution| execution.header_root == header.beacon().tree_hash_root())
+                    .map(|execution| execution.block_number);
+                Ok(Some(StoredFinalizedHeader {
+                    header,
+                    block_number,
+                    encoded,
+                }))
+            }
             None => Ok(None),
         }
-    }
-
-    /// Persist the execution block number for the finalized header already in Redis. Only
-    /// used to backfill a header written before the block number was persisted; the regular
-    /// path writes both atomically in [`Self::update_finalized_header_and_proof_states`].
-    pub async fn set_finalized_execution_block_number(
-        &mut self,
-        block_number: u64,
-    ) -> Result<(), ProofServiceError> {
-        let key = self.finalized_execution_block_number_key();
-        self.conn_manager.set::<_, _, ()>(key, block_number).await?;
-        Ok(())
     }
 
     /// Set the state for a specific proof request.
@@ -158,40 +170,51 @@ where
         Ok(())
     }
 
-    /// Atomically update the finalized header, the execution block number it anchors to, and
-    /// multiple proof states.
-    pub async fn update_finalized_header_and_proof_states(
+    /// Publish the header, its authenticated execution number and proof states together only
+    /// if the header has not changed since it was read. This also guards against an expired
+    /// lock or a legacy worker releasing another worker's lock during a rolling deployment.
+    pub(crate) async fn update_finalized_header_and_proof_states(
         &mut self,
+        expected: Option<&StoredFinalizedHeader>,
         latest_finalized_header: &LightClientHeader,
         execution_block_number: u64,
         updated_states: Vec<(ProofId, ProofRequestState<ProofOutput>)>,
-    ) -> Result<(), ProofServiceError> {
-        let mut pipe = redis::pipe();
-        pipe.atomic();
-
-        // Add the new finalized header and its execution block number to the transaction
-        pipe.set(
-            self.finalized_header_key(),
-            serde_json::to_string(latest_finalized_header)?,
+    ) -> Result<bool, ProofServiceError> {
+        let script = redis::Script::new(
+            r#"
+            if (redis.call('GET', KEYS[1]) or '') ~= ARGV[1] then
+                return 0
+            end
+            redis.call('SET', KEYS[1], ARGV[2])
+            redis.call('SET', KEYS[2], ARGV[3])
+            for i = 3, #KEYS do
+                redis.call('SET', KEYS[i], ARGV[i + 2], 'EX', ARGV[4])
+            end
+            return 1
+        "#,
         );
-        pipe.set(
-            self.finalized_execution_block_number_key(),
-            execution_block_number,
-        );
-
-        // Add updates for each proof state
+        let execution = FinalizedExecution {
+            header_root: latest_finalized_header.beacon().tree_hash_root(),
+            block_number: execution_block_number,
+        };
+        let mut invocation = script.prepare_invoke();
+        invocation
+            .key(self.finalized_header_key())
+            .key(self.finalized_execution_key())
+            .arg(
+                expected
+                    .map(|stored| stored.encoded.as_str())
+                    .unwrap_or_default(),
+            )
+            .arg(serde_json::to_string(latest_finalized_header)?)
+            .arg(serde_json::to_string(&execution)?)
+            .arg(PROOF_STATE_TTL_SECS);
         for (id, state) in updated_states {
-            let key = self.proof_state_key(&id);
-            pipe.cmd("SET")
-                .arg(&key)
-                .arg(serde_json::to_string(&state)?)
-                .arg("EX")
-                .arg(PROOF_STATE_TTL_SECS);
+            invocation
+                .key(self.proof_state_key(&id))
+                .arg(serde_json::to_string(&state)?);
         }
-
-        // Execute the transaction
-        pipe.query_async::<()>(&mut self.conn_manager).await?;
-        Ok(())
+        Ok(invocation.invoke_async(&mut self.conn_manager).await?)
     }
 
     /// Retrieves all proof requests matching the given status from Redis.
@@ -291,18 +314,36 @@ where
     }
 
     // Lock management methods
-    /// Acquire the global lock.
-    pub async fn acquire_global_lock(&mut self) -> Result<bool, ProofServiceError> {
-        let key = self.global_lock_key();
-        self.try_acquire_lock(&key, self.global_lock_duration.as_millis() as u64)
-            .await
+    /// Acquire the global lock and return its ownership token.
+    pub(crate) async fn acquire_global_lock(
+        &mut self,
+    ) -> Result<Option<String>, ProofServiceError> {
+        let token = Uuid::new_v4().to_string();
+        let acquired: bool = redis::cmd("SET")
+            .arg(self.global_lock_key())
+            .arg(&token)
+            .arg("NX")
+            .arg("PX")
+            .arg(self.global_lock_duration.as_millis() as u64)
+            .query_async(&mut self.conn_manager)
+            .await?;
+        Ok(acquired.then_some(token))
     }
 
-    /// Release the global lock (best-effort).
-    pub async fn release_global_lock(&mut self) {
-        let key = self.global_lock_key();
-        let _: Result<(), _> = self.conn_manager.del(&key).await;
-        debug!(target: "redis_store", "Global lock released (best-effort). Key: {}", key);
+    /// Release only our own lock; an expired owner must not delete its successor's lock.
+    pub(crate) async fn release_global_lock(&mut self, token: &str) {
+        let _: Result<i64, _> = redis::Script::new(
+            r#"
+            if redis.call('GET', KEYS[1]) == ARGV[1] then
+                return redis.call('DEL', KEYS[1])
+            end
+            return 0
+        "#,
+        )
+        .key(self.global_lock_key())
+        .arg(token)
+        .invoke_async(&mut self.conn_manager)
+        .await;
     }
 
     /// Acquire the lock for a specific proof generation task.

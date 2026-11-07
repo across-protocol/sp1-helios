@@ -22,8 +22,8 @@ jobs:
       - name: Checkout sources
         uses: actions/checkout@v4
 
-      - name: Install protoc
-        run: sudo apt-get install -y protobuf-compiler
+      - name: Install protoc and Redis for tests
+        run: sudo apt-get install -y protobuf-compiler redis-server
 
       - name: Install Rust
         uses: actions-rs/toolchain@v1
@@ -41,4 +41,9 @@ jobs:
         run: cargo clippy --all-features --all-targets -- -D warnings -A incomplete-features
         env:
           CARGO_INCREMENTAL: 1
+          SP1_SKIP_PROGRAM_BUILD: "true"
+
+      - name: Run API and primitives tests
+        run: cargo test --locked -p zk-api -p sp1-helios-primitives
+        env:
           SP1_SKIP_PROGRAM_BUILD: "true"
