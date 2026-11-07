@@ -135,16 +135,12 @@ where
         }
     }
 
-    /// Reads the finalized header and its execution block number from Redis.
-    ///
-    /// The block number is persisted next to the header by the finalized-header loop, so this
-    /// normally costs one Redis round trip and no RPC. A header stored by a version that did
-    /// not persist the number is resolved once and backfilled. Assumes the global lock is held,
-    /// which keeps the backfilled number consistent with the stored header.
+    /// Read the finalized snapshot without doing RPC work or repairing shared state.
+    /// The finality loop owns cache migration and refresh, including unchanged headers.
     async fn stored_finalized_header_locked(
         &mut self,
     ) -> Result<(LightClientHeader, u64), ProofServiceError> {
-        let (finalized_header, block_number) = self
+        let stored = self
             .redis_store
             .read_finalized_header_and_block_number()
             .await?
@@ -154,25 +150,12 @@ where
                 )
             })?;
 
-        let block_number = match block_number {
-            Some(block_number) => block_number,
-            None => {
-                info!(
-                    target: "proof_service::api",
-                    "Finalized header in redis (slot {}) has no stored execution block number; resolving and backfilling it",
-                    finalized_header.beacon().slot
-                );
-                let block_number = self
-                    .finalized_execution_block_number(&finalized_header)
-                    .await?;
-                self.redis_store
-                    .set_finalized_execution_block_number(block_number)
-                    .await?;
-                block_number
-            }
-        };
-
-        Ok((finalized_header, block_number))
+        let block_number = stored.block_number.ok_or_else(|| {
+            ProofServiceError::Internal(
+                "Finalized execution block number is not ready. Wait and try again".to_string(),
+            )
+        })?;
+        Ok((stored.header, block_number))
     }
 
     /// This function assumes that the corresponding global lock is held.
@@ -257,9 +240,7 @@ where
                             latest_finalized_header,
                             finalized_block_number,
                         )
-                        .await?;
-                        // If the above function did not error, stored state in redis is equal or newer than the proposed latest_finalized_header
-                        Ok(true)
+                        .await
                     } else {
                         debug!(target: "proof_service::run", "Could not acquire global lock to process new finalized header. Another worker might be processing.");
                         // If we failed to acquire the lock, we're not sure what the redis state is and if it's equal or newer to latest_finalized_header. Catiously return false
@@ -277,11 +258,31 @@ where
         &mut self,
         latest_finalized_header: LightClientHeader,
         finalized_block_number: u64,
-    ) -> Result<(), ProofServiceError> {
-        let stored_finalized_header = self.redis_store.read_finalized_header().await?;
-        let should_update_header: bool = match stored_finalized_header {
-            Some(redis_header) => {
-                redis_header.beacon().slot < latest_finalized_header.beacon().slot
+    ) -> Result<bool, ProofServiceError> {
+        let stored = self
+            .redis_store
+            .read_finalized_header_and_block_number()
+            .await?;
+        let should_update_header = match &stored {
+            Some(previous) => {
+                let previous_slot = previous.header.beacon().slot;
+                let latest_slot = latest_finalized_header.beacon().slot;
+                if previous_slot > latest_slot {
+                    return Ok(previous.block_number.is_some());
+                }
+                if previous_slot == latest_slot {
+                    if previous.header.beacon().tree_hash_root()
+                        != latest_finalized_header.beacon().tree_hash_root()
+                    {
+                        return Err(ProofServiceError::Internal(
+                            "Conflicting finalized headers at the same slot".to_string(),
+                        ));
+                    }
+                    // Repair the cache even when finality has not advanced.
+                    previous.block_number.is_none()
+                } else {
+                    true
+                }
             }
             None => true,
         };
@@ -311,13 +312,20 @@ where
             }
 
             // Use redis_store to update header, its block number and states atomically
-            self.redis_store
+            let published = self
+                .redis_store
                 .update_finalized_header_and_proof_states(
+                    stored.as_ref(),
                     &latest_finalized_header,
                     finalized_block_number,
                     updated_states,
                 )
                 .await?;
+            if !published {
+                // Another writer changed the header after our read. Retry with fresh state;
+                // no proof states were changed and no workers should be spawned.
+                return Ok(false);
+            }
 
             // Spawn tasks for requests that moved to Generating
             for request in requests_to_process_further {
@@ -362,7 +370,7 @@ where
             }
         }
 
-        Ok(())
+        Ok(true)
     }
 
     /// Resolves the execution block number a finalized light-client header anchors to.
@@ -691,13 +699,14 @@ where
         F: FnOnce(&mut Self, A, bool) -> BoxFuture<'_, Result<R, ProofServiceError>> + Send,
     {
         // Use redis_store to acquire lock
-        let acquired = self.redis_store.acquire_global_lock().await?;
-        debug!(target: "proof_service::lock", "Global lock acquire attempt result: {}", acquired);
+        let token = self.redis_store.acquire_global_lock().await?;
+        debug!(target: "proof_service::lock", "Global lock acquire attempt result: {}", token.is_some());
 
-        let result = f(self, args, acquired).await;
+        let result = f(self, args, token.is_some()).await;
 
-        // Use redis_store to release lock
-        self.redis_store.release_global_lock().await; // release_global_lock in store handles logging
+        if let Some(token) = token {
+            self.redis_store.release_global_lock(&token).await;
+        }
 
         result
     }
@@ -766,6 +775,9 @@ where
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod tests;
 
 /// Run stays in sync with the chain and periodically posts necessary updates to the proof_service
 pub async fn run<B>(mut proof_service: ProofService<B>) -> anyhow::Result<()>
